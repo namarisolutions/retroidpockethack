@@ -57,3 +57,5 @@ fi
 echo
 echo "Done. Try it now:  ./run.sh --demo --window 1280x720"
 echo "Optional (needs internet): .venv/bin/python tools/update_oui.py"
+echo "Optional - give the Demon King a real brain (tiny local LLM, ~0.4 GB):"
+echo "    ./llm/setup-llm.sh      then enable the csk-llm service"

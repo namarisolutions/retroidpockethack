@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 import tempfile
@@ -512,3 +513,47 @@ def test_agent_summarize_has_expected_keys():
     s = agent.summarize_state(w)
     for k in ("location", "high", "warn", "followers", "cameras", "trackers", "recurring"):
         assert k in s
+
+
+# ------------------------------------------------------------------ llm autodetect
+def test_detect_endpoint_and_llm_path(monkeypatch):
+    from csk import agent
+    agent._detect_cache.update(t=0.0, result=None)
+    calls = {}
+
+    def fake_get(url, timeout=1.5):
+        calls["models_url"] = url
+        if url.endswith("/v1/models"):
+            return {"data": [{"id": "qwen2.5-0.5b"}]}
+        raise AssertionError
+
+    monkeypatch.setattr(agent, "_get_json", fake_get)
+    ep = agent.detect_endpoint({}, ttl=0)
+    assert ep and ep["model"] == "qwen2.5-0.5b" and ep["url"].endswith("/v1/chat/completions")
+
+    # consult(auto) should take the llm path when a chat call succeeds
+    def fake_urlopen(req, timeout=20):
+        class R:
+            def read(self):
+                return json.dumps({"choices": [{"message": {"content":
+                    "THE AIR REEKS OF DECEPTION.\n- Forget that network."}}]}).encode()
+        return R()
+    import csk.agent as a
+    monkeypatch.setattr(a.urllib.request, "urlopen", fake_urlopen)
+    w = World(clock=Clock())
+    out = agent.consult(w, {"agent": {"backend": "auto"}})
+    assert out["via"] == "local LLM" and "DECEPTION" in out["speech"] and out["actions"]
+
+
+def test_detect_endpoint_none_when_down(monkeypatch):
+    from csk import agent
+    agent._detect_cache.update(t=0.0, result=None)
+
+    def boom(url, timeout=1.5):
+        raise OSError("refused")
+
+    monkeypatch.setattr(agent, "_get_json", boom)
+    assert agent.detect_endpoint({}, ttl=0) is None
+    # and consult falls back to rules
+    out = agent.consult(World(clock=Clock()), {"agent": {"backend": "auto"}})
+    assert out["via"] == "rules"

@@ -25,6 +25,7 @@ echo "   staging host app"
 tar -C host -cf - \
   --exclude='.venv' --exclude='.flashvenv' --exclude='__pycache__' \
   --exclude='*.pyc' --exclude='.pytest_cache' --exclude='csk/data/oui_full.csv' \
+  --exclude='llm/models' --exclude='*.gguf' \
   . | tar -C "$STAGE" -xf -
 
 # ---- firmware source -------------------------------------------------------

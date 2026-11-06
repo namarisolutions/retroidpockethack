@@ -205,14 +205,34 @@ New HIGH alerts sound an alarm and rumble.
   boot screen.
 - **Consult the Demon King** (menu): an on-device advisor reads the current
   threat state and gives a short situation report plus ranked actions, in
-  character. By default it's a transparent **rules engine** (labeled
-  `advisor: rules`) - no model weights, always works offline. If you run a
-  local LLM (ollama or any OpenAI-compatible llama.cpp endpoint) it'll use that
-  instead and fall back to rules on error:
-  ```json
-  { "agent": { "backend": "llm", "url": "http://127.0.0.1:11434/v1/chat/completions",
-               "model": "llama3.2:1b" } }
-  ```
+  character. Backend is **auto**: if a tiny local LLM is running it uses it
+  (footer reads `advisor: local LLM`), otherwise a transparent **rules engine**
+  (`advisor: rules`) - which always works offline, no model weights. The consult
+  runs off the UI thread, so a slow model never freezes the app ("the king
+  gathers his thoughts...").
+
+### Give it a real brain (a very small local LLM)
+
+Run a ~0.5B quantised model right on the handheld via llama.cpp:
+
+```sh
+./llm/setup-llm.sh      # installs llama-cpp-python[server], downloads
+                        # Qwen2.5-0.5B-Instruct Q4 (~0.4 GB), writes the config
+./llm/setup-llm.sh --start      # serve it at 127.0.0.1:8080 (OpenAI /v1)
+# or enable the background service: systemd/csk-llm.service
+```
+
+The advisor auto-detects a server on :8080 (llama.cpp), :8000
+(llama-cpp-python) or :11434 (ollama) - all OpenAI-compatible. Pick a different
+model with `./llm/setup-llm.sh --model <hf-repo> <file.gguf>`. On a handheld CPU
+a 0.5B model answers in a few seconds; that's why the consult is async. Force a
+backend in `~/.config/csk/config.json`:
+```json
+{ "agent": { "backend": "auto",
+             "url": "http://127.0.0.1:8080/v1/chat/completions",
+             "model": "qwen2.5-0.5b-instruct-q4_k_m.gguf" } }
+```
+(`backend`: `auto` | `llm` | `rules`.)
 
 ## Service discovery (naming cameras on a network)
 
@@ -291,7 +311,8 @@ host/csk/            Python app
   monitor.py         headless RF+LAN defense loop
   notify.py          alert sinks (local log + ntfy/Slack/Discord/JSON webhook)
   discover.py        mDNS / SSDP / ONVIF service discovery (names + camera detection)
-  agent.py           on-device advisor (rules by default, optional local LLM)
+  agent.py           on-device advisor (auto: local LLM if running, else rules)
+  llm/setup-llm.sh   install + run a tiny local LLM (llama.cpp) on the device
   art.py             pixel-art Demon King mascot + idle/blink/rage animations
 host/tests/          pytest suite (python3 -m pytest host/tests)
 ```

@@ -1,0 +1,21 @@
+# Keep the tiny local LLM running for the Demon King advisor (user service).
+# Install:
+#   sed "s|__DIR__|$HOME/csk|g" ~/csk/systemd/csk-llm.service > ~/.config/systemd/user/csk-llm.service
+#   systemctl --user daemon-reload && systemctl --user enable --now csk-llm
+#   journalctl --user -u csk-llm -f
+#
+# Run ./llm/setup-llm.sh once first (installs the server + downloads the model).
+[Unit]
+Description=CSK Demon King - local LLM server (llama.cpp)
+After=network.target
+
+[Service]
+ExecStart=__DIR__/llm/setup-llm.sh --start
+Restart=on-failure
+RestartSec=5
+# Tiny model, but cap memory so it can never threaten the handheld's RAM.
+MemoryMax=2G
+Nice=5
+
+[Install]
+WantedBy=default.target

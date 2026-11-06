@@ -237,6 +237,9 @@ class App:
             self.w.store = None
         self.voiceline: tuple[str, str, float] | None = None   # (text, mood, until)
         self._oracle: dict | None = None
+        self._oracle_thinking = False
+        self._oracle_ready = False
+        self._oracle_via = ""
         self.speak("boot")
         self.w.new_alert_cb = None
 
@@ -1082,16 +1085,22 @@ class App:
     def draw_oracle(self, top: int, bottom: int) -> None:
         u = self.u
         o = self._oracle or {}
+        thinking = self._oracle_thinking
         t = time.monotonic()
         sc = max(4, u // 4)
         sw, sh = art.skull_size(sc)
-        art.draw_skull(self.screen, (self.W - sw) // 2, top + u, sc, o.get("mood", "calm"),
-                       int(t * 3), t=t, animate=True)
+        mood = "rage" if thinking else o.get("mood", "calm")
+        art.draw_skull(self.screen, (self.W - sw) // 2, top + u, sc, mood, int(t * 3), t=t, animate=True)
         y = top + u + sh + u
-        self.text("THE DEMON KING SPEAKS", self.f_l, LEVEL_COL[HIGH] if o.get("mood") == "rage" else ACCENT,
+        self.text("THE DEMON KING SPEAKS", self.f_l, LEVEL_COL[HIGH] if mood == "rage" else ACCENT,
                   self.W // 2, y, center=True)
         y += int(u * 1.8)
-        # wrap speech
+        if thinking:
+            dots = "." * (int(t * 2) % 4)
+            via = self._oracle_via or "..."
+            self.text(f"the king gathers his thoughts{dots}", self.f_m, DIM, self.W // 2, y, center=True)
+            self.text(f"(consulting {via})", self.f_s, DIM, self.W // 2, y + int(u * 1.4), center=True)
+            return
         for line in self._wrap(o.get("speech", "..."), self.f_m, self.W - u * 4):
             self.text(line, self.f_m, FG, self.W // 2, y, center=True)
             y += int(u * 1.2)
@@ -1099,7 +1108,9 @@ class App:
         for act in o.get("actions", []):
             self.text(act, self.f_m, LEVEL_COL[WARN], self.W // 2, y, center=True, maxw=self.W - u * 3)
             y += int(u * 1.2)
-        self.text(f"[ advisor: {o.get('via', 'rules')} ]", self.f_s, DIM, self.W // 2, bottom - u, center=True)
+        via = o.get("via", "rules")
+        col = GOOD if via == "local LLM" else DIM
+        self.text(f"[ advisor: {via} ]", self.f_s, col, self.W // 2, bottom - u, center=True)
 
     def _wrap(self, text, font, maxw):
         words = text.split()
@@ -1116,10 +1127,35 @@ class App:
         return lines[:6]
 
     def consult_oracle(self) -> None:
+        import threading
+
         from . import agent
-        self._oracle = agent.consult(self.w, self.cfg)
+        if self._oracle_thinking:
+            return
         self.view = "oracle"
-        self.speak("rogue" if self._oracle.get("mood") == "rage" else "clear", 2.0)
+        self._oracle_thinking = True
+        # a tiny CPU LLM can take seconds; snapshot state and run off the UI thread
+        endpoint = agent.llm_available(self.cfg)
+        self._oracle_via = "local LLM" if endpoint else "rules"
+        state = agent.summarize_state(self.w)
+
+        def worker():
+            try:
+                out = agent.consult(self.w, self.cfg)
+            except Exception as e:
+                out = {"speech": "My sight falters.", "actions": [f"- advisor error: {e}"],
+                       "mood": "alert", "via": "error"}
+            self._oracle = out
+            self._oracle_thinking = False
+            self._oracle_ready = True
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _poll_oracle(self) -> None:
+        if self._oracle_ready:
+            self._oracle_ready = False
+            if self.view == "oracle" and self._oracle:
+                self.speak("rogue" if self._oracle.get("mood") == "rage" else "clear", 2.2)
 
     def hints(self) -> list[tuple[str, str]]:
         v = self.view
@@ -1281,6 +1317,7 @@ class App:
                 elif a.level == WARN:
                     self.snd.play("blip")
         self._check_karma()
+        self._poll_oracle()
         events = pygame.event.get()
         for ev in events:
             if ev.type == pygame.QUIT:

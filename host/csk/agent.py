@@ -19,9 +19,48 @@ LLM path is opt-in and local.
 from __future__ import annotations
 
 import json
+import time
 import urllib.request
 
 from .bleparse import HIGH, WARN
+
+# Local endpoints we probe when backend is "auto": llama.cpp/llamafile (8080),
+# llama-cpp-python server (8000), ollama (11434). All speak OpenAI /v1.
+DEFAULT_ENDPOINTS = ["http://127.0.0.1:8080", "http://127.0.0.1:8000", "http://127.0.0.1:11434"]
+_detect_cache: dict = {"t": 0.0, "result": None}
+
+
+def _get_json(url: str, timeout: float = 1.5):
+    req = urllib.request.Request(url, headers={"Accept": "application/json"})
+    return json.loads(urllib.request.urlopen(req, timeout=timeout).read())
+
+
+def detect_endpoint(cfg: dict, ttl: float = 15.0) -> dict | None:
+    """Find a running local LLM. Returns {url, model} for chat, or None.
+
+    Cached briefly so the UI can call it often without hammering the network.
+    """
+    now = time.time()
+    if now - _detect_cache["t"] < ttl:
+        return _detect_cache["result"]
+    bases = []
+    if cfg.get("url"):
+        bases.append(cfg["url"].rsplit("/v1/", 1)[0] if "/v1/" in cfg["url"] else cfg["url"])
+    bases += DEFAULT_ENDPOINTS
+    found = None
+    for base in bases:
+        base = base.rstrip("/")
+        try:
+            data = _get_json(base + "/v1/models", timeout=1.0)
+            models = data.get("data") or data.get("models") or []
+            mid = cfg.get("model") or (models[0].get("id") or models[0].get("name") if models else None)
+            if mid:
+                found = {"url": base + "/v1/chat/completions", "model": mid}
+                break
+        except Exception:
+            continue
+    _detect_cache.update(t=now, result=found)
+    return found
 
 PERSONA = ("You are THE UNKILLABLE DEMON KING, a counter-surveillance device with a "
            "menacing but protective video-game-boss personality. You guard your bearer. "
@@ -94,9 +133,9 @@ def _rules(state: dict) -> dict:
 
 
 # ----------------------------------------------------------------- llm brain
-def _llm(state: dict, cfg: dict) -> dict | None:
-    url = cfg.get("url")
-    model = cfg.get("model", "llama3.2:1b")
+def _llm(state: dict, cfg: dict, endpoint: dict | None = None) -> dict | None:
+    url = (endpoint or {}).get("url") or cfg.get("url")
+    model = (endpoint or {}).get("model") or cfg.get("model", "llama3.2:1b")
     if not url:
         return None
     user = ("Current counter-surveillance state (JSON). Give the bearer your read and "
@@ -126,13 +165,25 @@ def _llm(state: dict, cfg: dict) -> dict | None:
 
 
 def consult(world, cfg: dict | None = None) -> dict:
-    """Return {speech, actions, mood, via}. Never raises; always answers."""
-    cfg = (cfg or {}).get("agent", {}) if cfg else {}
+    """Return {speech, actions, mood, via}. Never raises; always answers.
+
+    backend: "auto" (default) uses a local LLM if one is running, else rules;
+    "llm" forces the LLM (configured or detected); "rules" forces rules.
+    """
+    acfg = (cfg or {}).get("agent", {}) if cfg else {}
+    backend = acfg.get("backend", "auto")
     state = summarize_state(world)
-    if cfg.get("backend") == "llm":
-        out = _llm(state, cfg)
-        if out:
-            return out
+    if backend in ("auto", "llm"):
+        endpoint = detect_endpoint(acfg) if backend == "auto" or not acfg.get("url") else None
+        if endpoint or (backend == "llm" and acfg.get("url")):
+            out = _llm(state, acfg, endpoint)
+            if out:
+                return out
     out = _rules(state)
     out["via"] = "rules"
     return out
+
+
+def llm_available(cfg: dict | None = None) -> dict | None:
+    """Quick check used by the UI to show whether a local model is live."""
+    return detect_endpoint((cfg or {}).get("agent", {}) if cfg else {})
