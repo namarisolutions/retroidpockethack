@@ -25,14 +25,42 @@ from .world import CONFIG_DIR, World
 
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
 
-BG = (0, 0, 0)
-FG = (225, 230, 235)
-DIM = (110, 118, 128)
-FAINT = (40, 44, 50)
-ACCENT = (64, 196, 255)
-SEL_BG = (22, 40, 58)
-LEVEL_COL = {INFO: (120, 180, 220), WARN: (255, 176, 32), HIGH: (255, 64, 64)}
-CAT_COL = {"tracker": (255, 120, 80), "camera": (255, 176, 32), "alpr": (255, 176, 32), "iot": (180, 160, 255)}
+BG = (9, 10, 14)            # near-black with a hint of blue
+PANEL = (16, 18, 24)        # header / footer bars
+SURFACE = (22, 25, 33)      # resting card
+SURFACE_SEL = (30, 38, 52)  # selected card
+BORDER = (38, 42, 52)       # hairline card border
+FG = (233, 237, 243)
+DIM = (128, 136, 150)
+FAINT = (48, 53, 64)
+ACCENT = (86, 204, 255)
+SEL_BG = SURFACE_SEL
+LEVEL_COL = {INFO: (120, 190, 230), WARN: (255, 183, 59), HIGH: (255, 86, 92)}
+LEVEL_NAME = {INFO: "INFO", WARN: "WARN", HIGH: "HIGH"}
+CAT_COL = {"tracker": (255, 130, 95), "camera": (255, 183, 59), "alpr": (255, 183, 59), "iot": (188, 170, 255)}
+GOOD = (72, 214, 138)
+
+
+def _load_font(size: int, bold: bool = False):
+    """A real TTF if we can find one (big readability win over the default)."""
+    import glob
+    pats = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans%s.ttf" % ("-Bold" if bold else ""),
+        "/usr/share/fonts/**/DejaVuSans%s.ttf" % ("-Bold" if bold else ""),
+        "/usr/share/fonts/**/NotoSans%s.ttf" % ("-Bold" if bold else "-Regular"),
+        "/usr/share/fonts/**/LiberationSans-%s.ttf" % ("Bold" if bold else "Regular"),
+        "/usr/share/fonts/**/Roboto-%s.ttf" % ("Bold" if bold else "Regular"),
+    ]
+    for pat in pats:
+        hits = sorted(glob.glob(pat, recursive=True))
+        if hits:
+            try:
+                return pygame.font.Font(hits[0], size)
+            except Exception:
+                pass
+    f = pygame.font.Font(None, int(size * 1.15))
+    f.set_bold(bold)
+    return f
 
 TABS = ["ALERTS", "MAP", "BLE", "NETWORKS", "CLIENTS", "FOLLOW", "HISTORY"]
 
@@ -122,10 +150,11 @@ class App:
             pygame.mouse.set_visible(False)
         self.W, self.H = self.screen.get_size()
         self.u = max(12, self.H // 24)          # base text size
-        self.f_s = pygame.font.Font(None, int(self.u * 0.85))
-        self.f_m = pygame.font.Font(None, int(self.u * 1.1))
-        self.f_l = pygame.font.Font(None, int(self.u * 1.6))
-        self.f_xl = pygame.font.Font(None, int(self.u * 6))
+        self.f_s = _load_font(int(self.u * 0.72))
+        self.f_m = _load_font(int(self.u * 0.92))
+        self.f_mb = _load_font(int(self.u * 0.92), bold=True)
+        self.f_l = _load_font(int(self.u * 1.3), bold=True)
+        self.f_xl = _load_font(int(self.u * 5), bold=True)
         self.inp = C.Input(self.cfg.get("layout", "nintendo"), self.cfg.get("raw_buttons"))
         self.snd = Sound()
         self.snd.muted = self.cfg.get("muted", False)
@@ -143,7 +172,7 @@ class App:
         self._scan: dict = {"running": False, "steps": [], "result": None, "sel": 0}
         self._boot_until = time.monotonic() + 3.0
         self.view = "boot"
-        self.f_title = pygame.font.Font(None, int(self.u * 2.1))
+        self.f_title = _load_font(int(self.u * 1.7), bold=True)
         # Persistent cross-day memory
         self.locations = self.cfg.get("locations", ["home", "work", "out"])
         self.loc_idx = 0
@@ -180,9 +209,36 @@ class App:
         save_config(self.cfg)
 
     def rssi_bar(self, x, y, w, h, rssi, col=ACCENT):
+        """Segmented signal meter (5 pips) - reads like a phone's signal bars."""
         frac = max(0.0, min(1.0, (rssi + 100) / 70))
-        pygame.draw.rect(self.screen, FAINT, (x, y, w, h), border_radius=h // 3)
-        pygame.draw.rect(self.screen, col, (x, y, int(w * frac), h), border_radius=h // 3)
+        pips = 5
+        gap = max(2, w // 40)
+        pw = (w - gap * (pips - 1)) / pips
+        lit = round(frac * pips)
+        for i in range(pips):
+            px = x + i * (pw + gap)
+            ph = h * (0.45 + 0.55 * (i + 1) / pips)   # rising heights
+            py = y + (h - ph)
+            c = col if i < lit else FAINT
+            pygame.draw.rect(self.screen, c, (px, py, pw, ph), border_radius=max(1, int(pw // 4)))
+
+    def card(self, x, y, w, h, selected=False, accent=None):
+        pygame.draw.rect(self.screen, SURFACE_SEL if selected else SURFACE, (x, y, w, h), border_radius=self.u // 2)
+        pygame.draw.rect(self.screen, accent or (ACCENT if selected else BORDER),
+                         (x, y, w, h), width=2 if selected else 1, border_radius=self.u // 2)
+        if accent:  # accent spine on the left
+            pygame.draw.rect(self.screen, accent, (x, y + self.u // 3, 4, h - 2 * (self.u // 3)),
+                             border_radius=2)
+
+    def badge(self, text, color, x, y, font=None):
+        font = font or self.f_s
+        img = font.render(text, True, BG)
+        pad = self.u // 3
+        w = img.get_width() + pad * 2
+        h = img.get_height() + self.u // 6
+        pygame.draw.rect(self.screen, color, (x, y, w, h), border_radius=h // 2)
+        self.screen.blit(img, (x + pad, y + self.u // 12))
+        return x + w + self.u // 4
 
     # ------------------------------------------------------------------ items
     def items(self) -> list:
@@ -497,67 +553,87 @@ class App:
 
     def draw_header(self) -> int:
         u, s = self.u, self.w.sensor
-        h = int(u * 1.8)
-        pygame.draw.rect(self.screen, (10, 12, 16), (0, 0, self.W, h))
+        h = int(u * 1.9)
+        pygame.draw.rect(self.screen, PANEL, (0, 0, self.W, h))
+        pygame.draw.line(self.screen, BORDER, (0, h), (self.W, h))
         ok = self.w.sensor_ok()
+        mood = self.mood()
         sc = max(1, h // 18)
         sw, sh = art.skull_size(sc)
-        art.draw_skull(self.screen, u // 2, (h - sh) // 2, sc, self.mood(), int(time.monotonic() * 3))
-        self.text(art.SHORT, self.f_m, LEVEL_COL[HIGH] if self.mood() == "rage" else ACCENT,
-                  u // 2 + sw + u // 3, h // 2 - self.f_m.get_height() // 2)
-        xoff = u // 2 + sw + u // 3 + self.f_m.size(art.SHORT)[0] + u // 2
-        status = (f"ch {s.get('ch', '?')}{' LOCK' if s.get('lock') else ''}  "
-                  f"BLE {'on' if s.get('ble', 1) else 'off'}  WiFi {'on' if s.get('wifi', 1) else 'off'}"
+        art.draw_skull(self.screen, u // 2, (h - sh) // 2, sc, mood, int(time.monotonic() * 3))
+        cy = h // 2 - self.f_m.get_height() // 2
+        self.text(art.SHORT, self.f_mb, LEVEL_COL[HIGH] if mood == "rage" else FG, u // 2 + sw + u // 3, cy)
+        xoff = u // 2 + sw + u // 3 + self.f_mb.size(art.SHORT)[0] + int(u * 0.7)
+        # sensor status: a dot + text
+        pygame.draw.circle(self.screen, GOOD if ok else LEVEL_COL[HIGH], (xoff, h // 2), u // 5)
+        xoff += u // 2
+        status = (f"ch {s.get('ch', '?')}{' LOCK' if s.get('lock') else ''}    "
+                  f"BLE {'on' if s.get('ble', 1) else 'off'}    WiFi {'on' if s.get('wifi', 1) else 'off'}"
                   if ok else self.src.status)
-        self.text(status, self.f_s, FG if ok else LEVEL_COL[WARN], xoff, h // 2 - self.f_s.get_height() // 2,
+        self.text(status, self.f_s, DIM if ok else LEVEL_COL[WARN], xoff, h // 2 - self.f_s.get_height() // 2,
                   maxw=self.W - xoff - u * 9)
-        right = f"@{self.w.location}   {len(self.w.devices)} dev   {time.strftime('%H:%M')}"
+        right = f"@{self.w.location}    {len(self.w.devices)} dev    {time.strftime('%H:%M')}"
         if self.snd.muted:
-            right = "MUTED   " + right
+            right = "MUTED    " + right
         self.text(right, self.f_s, DIM, self.W - u // 2, h // 2 - self.f_s.get_height() // 2, right=True)
-        return h
+        return h + u // 3
 
     def draw_tabs(self, y: int) -> int:
         u = self.u
-        h = int(u * 1.4)
-        n = len(TABS)
-        tw = self.W / n
+        h = int(u * 1.5)
         now = self.w.clock()
         active_high = any(a.active(now) and a.level == HIGH for a in self.w.alerts.values())
-        for i, t in enumerate(TABS):
-            x = int(i * tw)
-            if i == self.tab:
-                pygame.draw.rect(self.screen, SEL_BG, (x, y, int(tw), h))
-                pygame.draw.rect(self.screen, ACCENT, (x, y + h - 4, int(tw), 4))
+        # measure each pill so widths fit the text
+        labels = []
+        for t in TABS:
             label = t
             if t == "ALERTS":
                 cnt = sum(1 for a in self.w.alerts.values() if a.active(now))
-                label = f"ALERTS {cnt}" if cnt else t
-            col = LEVEL_COL[HIGH] if (t == "ALERTS" and active_high) else (FG if i == self.tab else DIM)
-            self.text(label, self.f_s, col, int(x + tw / 2), y + (h - self.f_s.get_height()) // 2, center=True)
-        return y + h
+                label = f"ALERTS  {cnt}" if cnt else t
+            labels.append(label)
+        gap = u // 3
+        widths = [self.f_m.size(lbl)[0] + u for lbl in labels]
+        total = sum(widths) + gap * (len(TABS) - 1)
+        x = max(u // 2, (self.W - total) // 2)
+        py = y + (h - int(u * 1.05)) // 2
+        ph = int(u * 1.05)
+        for i, (t, lbl, w) in enumerate(zip(TABS, labels, widths)):
+            sel = i == self.tab
+            if sel:
+                pygame.draw.rect(self.screen, SURFACE_SEL, (x, py, w, ph), border_radius=ph // 2)
+                pygame.draw.rect(self.screen, ACCENT, (x, py, w, ph), width=2, border_radius=ph // 2)
+            col = LEVEL_COL[HIGH] if (t == "ALERTS" and active_high) else (FG if sel else DIM)
+            self.text(lbl, self.f_m, col, x + w // 2, py + (ph - self.f_m.get_height()) // 2, center=True)
+            x += w + gap
+        return y + h + u // 4
 
     def draw_footer(self, hints: list[tuple[str, str]]) -> int:
         u = self.u
-        h = int(u * 1.3)
+        h = int(u * 1.4)
         y = self.H - h
-        pygame.draw.rect(self.screen, (10, 12, 16), (0, y, self.W, h))
-        x = u // 2
+        pygame.draw.rect(self.screen, PANEL, (0, y, self.W, h))
+        pygame.draw.line(self.screen, BORDER, (0, y), (self.W, y))
+        x = u
         for btn, what in hints:
-            r = self.f_s.render(btn, True, BG)
-            bw = r.get_width() + u // 2
-            pygame.draw.rect(self.screen, DIM, (x, y + h // 6, bw, h * 2 // 3), border_radius=h // 3)
-            self.screen.blit(r, (x + u // 4, y + (h - r.get_height()) // 2))
-            x += bw + u // 4
-            x = self.text(what, self.f_s, DIM, x, y + (h - self.f_s.get_height()) // 2).right + u // 2
-        return y
+            if btn:
+                r = self.f_mb.render(btn, True, BG)
+                bw = r.get_width() + int(u * 0.7)
+                bh = int(h * 0.56)
+                by = y + (h - bh) // 2
+                pygame.draw.rect(self.screen, ACCENT, (x, by, bw, bh), border_radius=bh // 2)
+                self.screen.blit(r, (x + int(u * 0.35), by + (bh - r.get_height()) // 2))
+                x += bw + u // 4
+            x = self.text(what, self.f_s, DIM, x, y + (h - self.f_s.get_height()) // 2).right + int(u * 0.8)
+        return y - u // 3
 
     def draw_list(self, top: int, bottom: int) -> None:
         u = self.u
         tab = TABS[self.tab]
         items = self.items()
-        row_h = int(u * 2.2)
-        rows = max(1, (bottom - top) // row_h)
+        gap = max(4, u // 4)
+        row_h = int(u * 2.3)
+        slot = row_h + gap
+        rows = max(1, (bottom - top) // slot)
         if not items:
             msg = {"ALERTS": "No alerts. Scanning...", "FOLLOW": "Press X each time you've moved somewhere new.",
                    "MAP": "No WiFi clients associated yet. Listening...",
@@ -572,12 +648,13 @@ class App:
         self.sel[tab] = sel
         start = max(0, min(sel - rows // 2, len(items) - rows))
         now = self.w.clock()
+        mx = u // 2
+        self._card_x, self._card_w = mx, self.W - mx * 2 - (u // 3 if len(items) > rows else 0)
         for i, it in enumerate(items[start:start + rows]):
             idx = start + i
-            y = top + i * row_h
-            if idx == sel:
-                pygame.draw.rect(self.screen, SEL_BG, (0, y, self.W, row_h))
-                pygame.draw.rect(self.screen, ACCENT, (0, y, 6, row_h))
+            y = top + i * slot + gap // 2
+            accent = self._row_accent(tab, it, now)
+            self.card(self._card_x, y, self._card_w, row_h, selected=idx == sel, accent=accent)
             if tab == "ALERTS":
                 self._row_alert(it, y, row_h, now)
             elif tab == "MAP":
@@ -587,59 +664,100 @@ class App:
             else:
                 self._row_device(it, y, row_h, now, tab)
         if len(items) > rows:  # scrollbar
-            sb_h = (bottom - top) * rows / len(items)
-            sb_y = top + (bottom - top - sb_h) * start / max(1, len(items) - rows)
-            pygame.draw.rect(self.screen, FAINT, (self.W - 6, int(sb_y), 4, int(sb_h)))
+            track = bottom - top
+            sb_h = max(u, track * rows / len(items))
+            sb_y = top + (track - sb_h) * start / max(1, len(items) - rows)
+            pygame.draw.rect(self.screen, FAINT, (self.W - u // 3, int(sb_y), 5, int(sb_h)), border_radius=3)
+
+    def _row_accent(self, tab, it, now):
+        """Left-spine accent colour per row, or None."""
+        if tab == "ALERTS":
+            return LEVEL_COL[it.level] if it.active(now) else None
+        if tab == "HISTORY":
+            r = it
+            if r["n_locations"] >= 2 and r["n_days"] >= 2:
+                return LEVEL_COL[HIGH]
+            if r["n_locations"] >= 2 or r["n_days"] >= 2:
+                return LEVEL_COL[WARN]
+            return None
+        d = getattr(it, "dev", it)
+        if d is None:
+            return None
+        if self.w.watched_match(d) or getattr(d, "karma", False):
+            return LEVEL_COL[HIGH]
+        if getattr(d, "suspicion", None):
+            return LEVEL_COL[HIGH]
+        if d.category in CAT_COL:
+            return CAT_COL[d.category]
+        return None
+
+    def _lx(self):
+        return self._card_x + self.u // 2
+
+    def _rx(self):
+        return self._card_x + self._card_w - self.u // 2
 
     def _row_alert(self, a, y, h, now):
         u = self.u
+        lx = self._lx()
         col = LEVEL_COL[a.level] if a.active(now) else DIM
-        pygame.draw.circle(self.screen, col, (u, y + h // 2), u // 3)
+        bx = self.badge(LEVEL_NAME[a.level], col, lx, y + u // 4, self.f_s)
         if not a.seen_by_user and a.active(now):
-            pygame.draw.circle(self.screen, FG, (u, y + h // 2), u // 3, 2)
-        self.text(a.title, self.f_m, col if a.level else FG, u * 2, y + u // 5, maxw=self.W - u * 8)
-        self.text(a.detail, self.f_s, DIM, u * 2, y + int(u * 1.15), maxw=self.W - u * 8)
-        self.text(("now" if a.active(now) else ago(now - a.last) + " ago"), self.f_s, DIM, self.W - u, y + u // 5, right=True)
-        self.text(f"for {ago(a.last - a.first)}", self.f_s, DIM, self.W - u, y + int(u * 1.15), right=True)
+            pygame.draw.circle(self.screen, ACCENT, (bx + u // 6, y + u // 4 + self.f_s.get_height() // 2 + u // 12), u // 7)
+            bx += u // 2
+        self.text(a.title, self.f_mb, col if a.level else FG, bx, y + u // 5, maxw=self._rx() - bx - u * 4)
+        self.text(a.detail, self.f_s, DIM, lx, y + int(u * 1.25), maxw=self._rx() - lx - u * 4)
+        self.text(("now" if a.active(now) else ago(now - a.last) + " ago"), self.f_s, DIM, self._rx(), y + u // 4, right=True)
+        self.text(f"for {ago(a.last - a.first)}", self.f_s, DIM, self._rx(), y + int(u * 1.25), right=True)
 
     def _row_map(self, row, y, h, now):
         u = self.u
+        lx, rx = self._lx(), self._rx()
+        meter_x = rx - u * 4 - u * 2
         if row.is_ap:
             ap = row.dev
             if ap is None:   # clients whose AP we haven't heard a beacon from
-                self.text(f"(unknown AP {row.bssid})", self.f_m, DIM, u, y + u // 5)
-                self.text(f"{row.clients} client(s)  -  no beacon seen", self.f_s, DIM, u, y + int(u * 1.15))
+                self.text(f"(unknown AP {row.bssid})", self.f_mb, DIM, lx, y + u // 5)
+                self.text(f"{row.clients} client(s)  -  no beacon seen", self.f_s, DIM, lx, y + int(u * 1.3))
                 return
             hostile = self.w.watched_match(ap) is not None
             sus = bool(ap.suspicion or ap.karma)
             col = LEVEL_COL[HIGH] if (hostile or sus) else FG
+            x = lx
+            if hostile:
+                x = self.badge("WATCH", LEVEL_COL[HIGH], x, y + u // 4, self.f_s)
+            if ap.karma:
+                x = self.badge("KARMA", LEVEL_COL[HIGH], x, y + u // 4, self.f_s)
+            elif sus:
+                x = self.badge("SUSPECT", LEVEL_COL[HIGH], x, y + u // 4, self.f_s)
             ssid = next(iter(ap.ssids), "") if len(ap.ssids) == 1 else (f"{len(ap.ssids)} SSIDs" if ap.ssids else "<hidden>")
-            flag = ("  [WATCH]" if hostile else "") + ("  [KARMA]" if ap.karma else "") + ("  [SUSPECT]" if sus and not ap.karma else "")
-            self.text(f"{ssid}{flag}", self.f_m, col, u, y + u // 5, maxw=self.W - u * 14)
+            self.text(ssid, self.f_mb, col, x, y + u // 5, maxw=meter_x - x - u // 2)
             sec = ["OPEN", "WEP", "WPA"][ap.enc] if 0 <= ap.enc <= 2 else "?"
-            self.text(f"{ap.addr}  ch{ap.ch}  {sec}  {ap.vendor or ''}", self.f_s, DIM, u, y + int(u * 1.15), maxw=self.W - u * 14)
-            self.text(f"{row.clients} client(s)", self.f_s, ACCENT, self.W - u, y + u // 5, right=True)
-            self.rssi_bar(self.W - u * 9, y + int(u * 1.3), u * 5, u // 2, ap.rssi, col if col != FG else ACCENT)
+            self.text(f"{ap.addr}   ch{ap.ch}   {sec}   {ap.vendor or ''}", self.f_s, DIM, lx, y + int(u * 1.3), maxw=meter_x - lx)
+            self.text(f"{row.clients} client(s)", self.f_s, ACCENT, rx, y + u // 4, right=True)
+            self.rssi_bar(meter_x, y + int(u * 1.3), u * 4, int(u * 0.7), ap.rssi, col if col != FG else ACCENT)
         else:
             c = row.dev
             mine = self.w.is_allowed(c.id)
             bps = c.uplink_bps(now)
             streaming = bps >= 40000
             col = LEVEL_COL[WARN] if streaming else DIM if mine else FG
-            # tree connector
-            pygame.draw.line(self.screen, FAINT, (u * 2, y), (u * 2, y + h), 2)
-            pygame.draw.line(self.screen, FAINT, (u * 2, y + h // 2), (u * 3, y + h // 2), 2)
-            label = c.title() + ("  [mine]" if mine else "")
+            tx = lx + u
+            pygame.draw.line(self.screen, FAINT, (lx + u // 2, y), (lx + u // 2, y + h), 2)
+            pygame.draw.line(self.screen, FAINT, (lx + u // 2, y + h // 2), (tx, y + h // 2), 2)
+            x = tx + u // 3
             if streaming:
-                label += "  STREAMING"
-            self.text(label, self.f_s, col, int(u * 3.5), y + u // 4, maxw=self.W - u * 16)
+                x = self.badge("STREAMING", LEVEL_COL[WARN], x, y + u // 4, self.f_s)
+            label = c.title() + ("  [mine]" if mine else "")
+            self.text(label, self.f_m, col, x, y + u // 4, maxw=meter_x - x - u // 2)
             up = f"up {bps / 1000:.0f} kB/s" if bps > 1000 else "idle"
-            self.text(f"{c.addr}   {up}", self.f_s, DIM, int(u * 3.5), y + int(u * 1.2), maxw=self.W - u * 16)
-            self.rssi_bar(self.W - u * 9, y + u // 2, u * 5, u // 2, c.rssi, col if streaming else ACCENT)
-            self.text(f"{c.rssi}", self.f_s, FG, self.W - u, y + u // 3, right=True)
+            self.text(f"{c.addr}   {up}", self.f_s, DIM, tx + u // 3, y + int(u * 1.3), maxw=meter_x - tx)
+            self.rssi_bar(meter_x, y + u // 2, u * 4, int(u * 0.7), c.rssi, col if streaming else ACCENT)
+            self.text(f"{c.rssi}", self.f_m, FG, rx, y + u // 3, right=True)
 
     def _row_history(self, r, y, h, now):
         u = self.u
+        lx, rx = self._lx(), self._rx()
         dev = r.get("device", {})
         title = (dev.get("title") or "").strip() or r["mac"]
         cat = dev.get("category", "")
@@ -648,38 +766,52 @@ class App:
         trusted = dev.get("trusted")
         if trusted:
             col = DIM
-        self.text(title + ("  [mine]" if trusted else ""), self.f_m, col, u, y + u // 5, maxw=self.W - u * 12)
+        x = lx
+        if trusted:
+            x = self.badge("MINE", DIM, x, y + u // 4, self.f_s)
+        self.text(title, self.f_mb, col, x, y + u // 5, maxw=rx - x - u * 7)
         locs = ", ".join(r["locations"][:4]) + ("..." if r["n_locations"] > 4 else "")
-        sub = f"{r['mac']}  {cat or dev.get('kind', '')}  seen at: {locs}"
-        self.text(sub, self.f_s, DIM, u, y + int(u * 1.15), maxw=self.W - u * 12)
-        self.text(f"{r['n_locations']} place(s)", self.f_s, col, self.W - u, y + u // 5, right=True)
+        sub = f"{r['mac']}   {cat or dev.get('kind', '')}   seen at: {locs}"
+        self.text(sub, self.f_s, DIM, lx, y + int(u * 1.3), maxw=rx - lx - u * 7)
+        self.text(f"{r['n_locations']} place(s)", self.f_mb, col, rx, y + u // 4, right=True)
         span = ago(now - r["last"]) if r["last"] else "?"
-        self.text(f"{r['n_days']} day(s) - last {span} ago", self.f_s, DIM, self.W - u, y + int(u * 1.15), right=True)
+        self.text(f"{r['n_days']} day(s) - last {span} ago", self.f_s, DIM, rx, y + int(u * 1.3), right=True)
 
     def _row_device(self, d, y, h, now, tab):
         u = self.u
+        lx, rx = self._lx(), self._rx()
         mine = self.w.is_allowed(d.id)
         hostile = self.w.watched_match(d) is not None
+        meter_w = u * 4
+        meter_x = rx - meter_w - u * 2
         col = LEVEL_COL[HIGH] if hostile or d.karma else DIM if mine else CAT_COL.get(d.category, FG)
-        title = d.title() + ("  [mine]" if mine else "") + ("  [WATCH]" if hostile else "") + ("  [KARMA]" if d.karma else "")
-        self.text(title, self.f_m, col, u, y + u // 5, maxw=self.W - u * 12)
+        x = lx
+        # status badges
+        for txt, bc in [("WATCH", LEVEL_COL[HIGH]) if hostile else (None, None),
+                        ("KARMA", LEVEL_COL[HIGH]) if d.karma else (None, None),
+                        ("MINE", DIM) if mine else (None, None),
+                        (d.category.upper(), CAT_COL.get(d.category)) if d.category in CAT_COL else (None, None)]:
+            if txt:
+                x = self.badge(txt, bc, x, y + u // 4, self.f_s)
+        title = d.title()
+        self.text(title, self.f_mb, col, x, y + u // 5, maxw=meter_x - x - u // 2)
         sub = d.addr
         if d.kind == "ap":
-            sub += f"  ch{d.ch}  {['OPEN', 'WEP', 'WPA'][d.enc] if 0 <= d.enc <= 2 else ''}"
+            sub += f"   ch{d.ch}   {['OPEN', 'WEP', 'WPA'][d.enc] if 0 <= d.enc <= 2 else ''}"
         elif d.kind == "wifi":
             bps = d.uplink_bps(now)
             if bps > 1000:
-                sub += f"  up {bps / 1000:.0f} kB/s"
+                sub += f"   up {bps / 1000:.0f} kB/s"
             if d.ssids:
-                sub += "  probes: " + ", ".join(sorted(d.ssids))[:60]
+                sub += "   probes: " + ", ".join(sorted(d.ssids))[:60]
         if d.vendor and d.vendor not in title:
-            sub += f"  {d.vendor}"
+            sub += f"   {d.vendor}"
         if tab == "FOLLOW":
-            sub = f"seen at {len(d.checkpoints)} of {self.w.checkpoint_idx + 1} locations  |  {d.kind.upper()}  {d.addr}"
-        self.text(sub, self.f_s, DIM, u, y + int(u * 1.15), maxw=self.W - u * 12)
-        self.rssi_bar(self.W - u * 9, y + u // 2, u * 5, u // 2, d.rssi, col if d.category else ACCENT)
-        self.text(f"{d.rssi}", self.f_s, FG, self.W - u, y + u // 3, right=True)
-        self.text(ago(now - d.last), self.f_s, DIM, self.W - u, y + int(u * 1.15), right=True)
+            sub = f"seen at {len(d.checkpoints)} of {self.w.checkpoint_idx + 1} locations   |   {d.kind.upper()}   {d.addr}"
+        self.text(sub, self.f_s, DIM, lx, y + int(u * 1.3), maxw=meter_x - lx - u // 2)
+        self.rssi_bar(meter_x, y + u // 2, meter_w, int(u * 0.8), d.rssi, col if d.category else ACCENT)
+        self.text(f"{d.rssi}", self.f_mb, FG, rx, y + u // 3, right=True)
+        self.text(ago(now - d.last), self.f_s, DIM, rx, y + int(u * 1.3), right=True)
 
     def draw_detail(self, top: int, bottom: int) -> None:
         u = self.u
