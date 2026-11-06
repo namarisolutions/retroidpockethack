@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "csk-demon-king"
+version = "0.1.0"
+description = "THE UNKILLABLE DEMON KING - ESP32 + handheld counter-surveillance kit"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "namarisolutions" }]
+dependencies = [
+    "pyserial>=3.5",
+    "pygame-ce>=2.4",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[project.scripts]
+csk = "csk.__main__:main"
+
+[tool.setuptools]
+packages = ["csk"]
+
+[tool.setuptools.package-data]
+csk = ["data/*.csv", "data/.gitkeep"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

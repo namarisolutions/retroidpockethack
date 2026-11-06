@@ -65,7 +65,31 @@ The Flip 2 powers the ESP32 (about 100 mA). It shows up as `/dev/ttyUSB0`
 
 ## 3. Install on the Retroid (SteamOS-based ARM image)
 
-In **Desktop Mode**, copy the `host/` folder to `~/csk` (USB stick, SD card,
+**The easy way - installable package (no PlatformIO on the device):**
+
+Build the release tarball once on any machine with PlatformIO:
+
+```sh
+make package            # -> dist/csk-demon-king-<version>.tar.gz
+```
+
+Copy that one file to the Flip, then in **Desktop Mode**:
+
+```sh
+tar -xzf csk-demon-king-*.tar.gz && cd csk-demon-king-*
+./install.sh            # venv + `csk` command + ESP32 udev rule + adds to Steam
+./flash.sh              # flash the bundled prebuilt firmware over USB (no PlatformIO)
+./run.sh --demo         # try it; or ./run.sh for live
+```
+
+The tarball carries the app, a pip-installable package (gives a `csk` command),
+prebuilt ESP32 firmware (`firmware/prebuilt/devkitv1/`, merged + parts +
+SHA256SUMS), the firmware source for rebuilds, the systemd monitor unit, and
+the udev rule. `INSTALL.txt` inside repeats these steps.
+
+**From a git checkout** (if you'd rather not build a tarball):
+
+Copy the `host/` folder to `~/csk` (USB stick, SD card,
 `scp`, or `git clone`), then in Konsole:
 
 ```sh

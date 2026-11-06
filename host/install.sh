@@ -16,7 +16,11 @@ if ! python3 -c 'import venv' 2>/dev/null; then
 fi
 [ -d .venv ] || python3 -m venv .venv
 .venv/bin/python -m pip install -q --upgrade pip
-.venv/bin/python -m pip install -q -r requirements.txt
+if [ -f pyproject.toml ]; then
+  .venv/bin/python -m pip install -q .        # installs deps + the `csk` command
+else
+  .venv/bin/python -m pip install -q -r requirements.txt
+fi
 .venv/bin/python -c 'import pygame, serial; print("   pygame", pygame.version.ver, "/ pyserial", serial.__version__)'
 
 echo "== 2/3 USB serial permissions (needs your sudo password; set one with 'passwd' if you never have)"

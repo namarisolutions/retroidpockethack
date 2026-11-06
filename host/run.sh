@@ -8,6 +8,12 @@ cd "$DIR" || exit 1
 
 PY=python3
 [ -x "$DIR/.venv/bin/python" ] && PY="$DIR/.venv/bin/python"
+# Prefer the installed console script if present (same thing, nicer name).
+if [ -x "$DIR/.venv/bin/csk" ]; then
+  CSK="$DIR/.venv/bin/csk"
+else
+  CSK="$PY -m csk"
+fi
 
 # Prefer the stable symlink created by the udev rule.
 if [ -e /dev/csk-esp32 ] && ! printf '%s\n' "$@" | grep -q -- '--port'; then
@@ -22,7 +28,7 @@ fi
 
 exec_log="$HOME/csk-logs/last-run.txt"
 mkdir -p "$HOME/csk-logs"
-"$PY" -m csk "$@" 2>"$exec_log"
+$CSK "$@" 2>"$exec_log"
 RC=$?
 [ -n "$GPTK" ] && kill "$GPTK" 2>/dev/null
 exit $RC
