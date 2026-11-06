@@ -196,6 +196,33 @@ New HIGH alerts sound an alarm and rumble.
 4. Non-Steam launchers that grab the pad exclusively: `CSK_GPTOKEYB=1 ./run.sh`
    (uses `csk.gptk`).
 
+## The Demon King speaks (personality + advisor)
+
+- **Voicelines + chiptune:** on each HIGH threat the Demon King barks a short
+  video-game-boss line ("SOMETHING WATCHES. SO DO I.") with a synthesized
+  NES-style chiptune sting - no audio files, all generated on the fly. The
+  pixel skull mascot idles, blinks, and shakes with rage on the header and
+  boot screen.
+- **Consult the Demon King** (menu): an on-device advisor reads the current
+  threat state and gives a short situation report plus ranked actions, in
+  character. By default it's a transparent **rules engine** (labeled
+  `advisor: rules`) - no model weights, always works offline. If you run a
+  local LLM (ollama or any OpenAI-compatible llama.cpp endpoint) it'll use that
+  instead and fall back to rules on error:
+  ```json
+  { "agent": { "backend": "llm", "url": "http://127.0.0.1:11434/v1/chat/completions",
+               "model": "llama3.2:1b" } }
+  ```
+
+## Service discovery (naming cameras on a network)
+
+The LAN scan (`--scan`, `--scan-ap`, 24/7 monitor, and in-app Join & scan) now
+also runs **mDNS, SSDP/UPnP and ONVIF WS-Discovery**. This names devices
+("Reolink RLC-810", "FrontDoor") and flags cameras that *announce* themselves
+via ONVIF or an RTSP mDNS service, catching ones a bare port scan would miss.
+All read-only, your-network-only, no dependencies.
+
+## Persistent memory:
 ## Persistent memory: "have I seen this before?"
 
 The kit remembers devices **across restarts, days, and places** - the strongest
@@ -263,6 +290,9 @@ host/csk/            Python app
   wifi.py / apscan.py  join a chosen AP and scan what's behind it (nmcli), then restore
   monitor.py         headless RF+LAN defense loop
   notify.py          alert sinks (local log + ntfy/Slack/Discord/JSON webhook)
+  discover.py        mDNS / SSDP / ONVIF service discovery (names + camera detection)
+  agent.py           on-device advisor (rules by default, optional local LLM)
+  art.py             pixel-art Demon King mascot + idle/blink/rage animations
 host/tests/          pytest suite (python3 -m pytest host/tests)
 ```
 

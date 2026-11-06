@@ -103,38 +103,91 @@ def ago(sec: float) -> str:
     return f"{sec // 3600}h{(sec % 3600) // 60:02d}"
 
 
+# Note name -> frequency (Hz), a couple of octaves of a chiptune scale.
+_NOTES = {}
+for _oct in range(2, 7):
+    for _i, _nm in enumerate(["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]):
+        _NOTES[f"{_nm}{_oct}"] = 440.0 * 2 ** ((_oct - 4) + (_i - 9) / 12)
+_NOTES["-"] = 0.0   # rest
+
+
 class Sound:
+    """Chiptune engine: synthesizes square/triangle NES-style jingles and SFX."""
+
     def __init__(self):
         self.ok = False
         self.muted = False
+        self.freq = 22050
+        self.ch = 1
+        self.cache: dict = {}
         try:
             pygame.mixer.init(22050, -16, 1, 512)
-            freq, _, ch = pygame.mixer.get_init()
-            self.click = self._tone(freq, ch, 1800, 0.012, 0.6)
-            self.alarm = self._tone(freq, ch, 880, 0.25, 0.5, wobble=True)
-            self.blip = self._tone(freq, ch, 1200, 0.05, 0.35)
+            self.freq, _, self.ch = pygame.mixer.get_init()
+            # simple SFX
+            self.click = self._seq([("C7", 0.012)], vol=0.5, wave="sq")
+            self.blip = self._seq([("E6", 0.05)], vol=0.35, wave="sq")
+            self.alarm = self._seq([("A4", 0.12), ("D#5", 0.12), ("A4", 0.12)], vol=0.5, wave="sq", duty=0.5)
             self.ok = True
         except Exception:
             pass
 
-    @staticmethod
-    def _tone(freq, ch, hz, dur, vol, wobble=False):
-        n = int(freq * dur)
+    def _wave(self, hz, i, wave, duty):
+        if hz <= 0:
+            return 0.0
+        phase = (hz * i / self.freq) % 1.0
+        if wave == "tri":
+            return 4 * abs(phase - 0.5) - 1
+        if wave == "saw":
+            return 2 * phase - 1
+        return 1.0 if phase < duty else -1.0        # square / pulse
+
+    def _seq(self, notes, vol=0.5, wave="sq", duty=0.5, bass=False):
+        """notes: list of (note, seconds). Returns a Sound."""
         buf = array.array("h")
-        for i in range(n):
-            f = hz * (1 + 0.5 * (i // (n // 4 or 1) % 2)) if wobble else hz
-            env = min(1.0, (n - i) / (n * 0.3 + 1))
-            v = int(32767 * vol * env * math.sin(2 * math.pi * f * i / freq))
-            for _ in range(ch):
-                buf.append(v)
-        return pygame.mixer.Sound(buffer=buf.tobytes())
+        for nm, dur in notes:
+            hz = _NOTES.get(nm, 0.0)
+            n = max(1, int(self.freq * dur))
+            for i in range(n):
+                env = min(1.0, (n - i) / (n * 0.25 + 1)) * min(1.0, i / (self.freq * 0.004 + 1))
+                v = self._wave(hz, i, wave, duty)
+                if bass:
+                    v += 0.5 * self._wave(hz / 2, i, "tri", 0.5)
+                s = int(32767 * vol * env * max(-1.0, min(1.0, v)))
+                for _ in range(self.ch):
+                    buf.append(s)
+        try:
+            return pygame.mixer.Sound(buffer=buf.tobytes())
+        except Exception:
+            return None
+
+    def jingle(self, name: str):
+        """Build (and cache) a named chiptune voiceline sting."""
+        if name in self.cache:
+            return self.cache[name]
+        q = 0.09
+        tunes = {
+            # boot: rising menacing arpeggio
+            "boot": self._seq([("C3", q), ("G3", q), ("C4", q), ("D#4", q), ("G4", q * 2)], vol=0.45, wave="sq", bass=True),
+            "rage": self._seq([("C5", 0.07), ("B4", 0.07), ("C5", 0.07), ("F5", 0.18)], vol=0.5, wave="sq", duty=0.25),
+            "tracker": self._seq([("A4", 0.08), ("A4", 0.08), ("E5", 0.16)], vol=0.45, wave="sq"),
+            "camera": self._seq([("D#5", 0.08), ("C5", 0.08), ("G4", 0.16)], vol=0.45, wave="sq", duty=0.25),
+            "rogue": self._seq([("F#4", 0.07), ("F4", 0.07), ("E4", 0.07), ("D#4", 0.16)], vol=0.45, wave="saw"),
+            "clear": self._seq([("C5", 0.08), ("E5", 0.08), ("G5", 0.08), ("C6", 0.18)], vol=0.4, wave="tri"),
+            "found": self._seq([("G5", 0.06), ("C6", 0.14)], vol=0.4, wave="sq"),
+        }
+        s = tunes.get(name)
+        self.cache[name] = s
+        return s
 
     def play(self, name: str) -> None:
-        if self.ok and not self.muted:
-            try:
-                getattr(self, name).play()
-            except Exception:
-                pass
+        if not self.ok or self.muted:
+            return
+        try:
+            snd = getattr(self, name, None) if name in ("click", "blip", "alarm") else self.jingle(name)
+            if snd:
+                snd.play()
+        except Exception:
+            pass
 
 
 class App:
@@ -182,7 +235,45 @@ class App:
             self.w.set_location(self.locations[self.loc_idx])
         except Exception:
             self.w.store = None
+        self.voiceline: tuple[str, str, float] | None = None   # (text, mood, until)
+        self._oracle: dict | None = None
+        self.speak("boot")
         self.w.new_alert_cb = None
+
+    # ----------------------------------------------------------- voicelines
+    VOICELINES = {
+        "boot": ["I AWAKEN. THE WATCH BEGINS.", "NONE SHALL WATCH YOU UNSEEN.", "I DO NOT SLEEP."],
+        "rogue": ["A FALSE GATE. I SEE THROUGH IT.", "THIS NETWORK LIES.", "DECEPTION DETECTED."],
+        "camera": ["AN EYE OF GLASS. I HAVE FOUND IT.", "SOMETHING WATCHES. SO DO I.", "A LENS IN THE DARK."],
+        "tracker": ["A BEACON CLINGS TO YOU.", "YOU ARE BEING TAGGED.", "SHAKE OFF THIS PARASITE."],
+        "deauth": ["AN ATTACK UPON THE AIR!", "SOMEONE SEVERS THE SIGNAL."],
+        "follow": ["A SHADOW MOVES AS YOU MOVE.", "YOU ARE FOLLOWED. I AM CERTAIN."],
+        "clear": ["THE AIR IS CLEAN... FOR NOW.", "ALL IS QUIET. I REMAIN VIGILANT."],
+    }
+
+    def speak(self, event: str, secs: float = 3.2) -> None:
+        import random
+        lines = self.VOICELINES.get(event)
+        if not lines:
+            return
+        mood = {"boot": "rage", "clear": "calm"}.get(event, "rage" if event in ("rogue", "deauth") else "alert")
+        self.voiceline = (random.choice(lines), mood, time.monotonic() + secs)
+        self.snd.play({"boot": "boot", "rogue": "rogue", "camera": "camera", "tracker": "tracker",
+                       "deauth": "rage", "follow": "found", "clear": "clear"}.get(event, "blip"))
+
+    def _event_for_alert(self, a) -> str:
+        t = a.title.lower()
+        if "deauth" in t:
+            return "deauth"
+        if "fake" in t or "rogue" in t or "evil twin" in t or "karma" in t:
+            return "rogue"
+        if "camera" in t:
+            return "camera"
+        if "tracker" in t or "find my" in t or "tile" in t or "tag" in t:
+            return "tracker"
+        if "following" in t or "seen repeatedly" in t:
+            return "follow"
+        return "rogue"
 
     # ---------------------------------------------------------------- helpers
     def text(self, s, font, col, x, y, right=False, center=False, maxw=None):
@@ -278,51 +369,54 @@ class App:
         return getattr(x, "dev_id", None) or getattr(x, "id", None)
 
     # ---------------------------------------------------------------- actions
-    MENU = ["Resume", "Location", "Face buttons", "Sound", "Rumble", "BLE scanning", "WiFi scanning",
-            "Mark everything visible as mine", "Export signed report", "Clear alerts", "Button test", "Quit"]
+    MENU = ["Resume", "Consult the Demon King", "Location", "Face buttons", "Sound", "Rumble",
+            "BLE scanning", "WiFi scanning", "Mark everything visible as mine", "Export signed report",
+            "Clear alerts", "Button test", "Quit"]
 
     def menu_value(self, i: int) -> str:
         s = self.w.sensor
-        return {1: self.w.location + "  (A to change)",
-                2: self.inp.layout.upper() + (" (A right)" if self.inp.layout == "nintendo" else " (A bottom)"),
-                3: "OFF" if self.snd.muted else "ON", 4: "ON" if self.rumble_on else "OFF",
-                5: "ON" if s.get("ble", 1) else "OFF", 6: "ON" if s.get("wifi", 1) else "OFF"}.get(i, "")
+        return {2: self.w.location + "  (A to change)",
+                3: self.inp.layout.upper() + (" (A right)" if self.inp.layout == "nintendo" else " (A bottom)"),
+                4: "OFF" if self.snd.muted else "ON", 5: "ON" if self.rumble_on else "OFF",
+                6: "ON" if s.get("ble", 1) else "OFF", 7: "ON" if s.get("wifi", 1) else "OFF"}.get(i, "")
 
     def menu_activate(self, i: int) -> None:
         if i == 0:
             self.view = "list"
         elif i == 1:
-            self.cycle_location()
+            self.consult_oracle()
         elif i == 2:
-            self.inp.toggle_layout()
+            self.cycle_location()
         elif i == 3:
-            self.snd.muted = not self.snd.muted
+            self.inp.toggle_layout()
         elif i == 4:
+            self.snd.muted = not self.snd.muted
+        elif i == 5:
             self.rumble_on = not self.rumble_on
             if self.rumble_on:
                 self.inp.rumble(0.6, 200)
-        elif i == 5:
+        elif i == 6:
             on = not self.w.sensor.get("ble", 1)
             self.src.send(f"ble {int(on)}")
             self.w.sensor["ble"] = int(on)
-        elif i == 6:
+        elif i == 7:
             on = not self.w.sensor.get("wifi", 1)
             self.src.send(f"wifi {int(on)}")
             self.w.sensor["wifi"] = int(on)
-        elif i == 7:
+        elif i == 8:
             n = self.w.allow_all_visible()
             self.notify(f"{n} devices marked as yours")
             self.view = "list"
-        elif i == 8:
+        elif i == 9:
             self.export_report()
             self.view = "list"
-        elif i == 9:
+        elif i == 10:
             self.w.alerts.clear()
             self.notify("Alerts cleared")
-        elif i == 10:
+        elif i == 11:
             self.view = "buttontest"
             self._bt_started = time.monotonic()
-        elif i == 11:
+        elif i == 12:
             self.running = False
         self.save()
 
@@ -365,6 +459,12 @@ class App:
         v = self.view
         if v == "boot":
             self.view = "list"
+            return
+        if v == "oracle":
+            if act == C.A:
+                self.consult_oracle()
+            elif act in (C.B, C.START):
+                self.view = "list"
             return
         if v == "buttontest":
             if act == C.START or (time.monotonic() - self._bt_started > 2 and act == "HOME"):
@@ -560,7 +660,8 @@ class App:
         mood = self.mood()
         sc = max(1, h // 18)
         sw, sh = art.skull_size(sc)
-        art.draw_skull(self.screen, u // 2, (h - sh) // 2, sc, mood, int(time.monotonic() * 3))
+        art.draw_skull(self.screen, u // 2, (h - sh) // 2, sc, mood, int(time.monotonic() * 3),
+                       t=time.monotonic(), animate=True)
         cy = h // 2 - self.f_m.get_height() // 2
         self.text(art.SHORT, self.f_mb, LEVEL_COL[HIGH] if mood == "rage" else FG, u // 2 + sw + u // 3, cy)
         xoff = u // 2 + sw + u // 3 + self.f_mb.size(art.SHORT)[0] + int(u * 0.7)
@@ -945,10 +1046,89 @@ class App:
         pygame.draw.rect(self.screen, LEVEL_COL[lvl] if lvl else ACCENT, (x, y, w, int(u * 1.8)), border_radius=u // 2)
         self.screen.blit(img, (x + u, y + (int(u * 1.8) - img.get_height()) // 2))
 
+    def draw_voiceline(self) -> None:
+        """Retro speech banner: animated skull + flashing text, bottom of screen."""
+        if not self.voiceline:
+            return
+        text, mood, until = self.voiceline
+        now = time.monotonic()
+        if now > until:
+            self.voiceline = None
+            return
+        u = self.u
+        t = now
+        sc = max(3, u // 5)
+        sw, sh = art.skull_size(sc)
+        pad = u // 2
+        tw = self.f_mb.size(text)[0]
+        bw = sw + pad * 3 + tw
+        bh = sh + pad
+        x = (self.W - bw) // 2
+        y = int(self.H * 0.72)
+        col = LEVEL_COL[HIGH] if mood == "rage" else LEVEL_COL[WARN] if mood == "alert" else GOOD
+        # box
+        pygame.draw.rect(self.screen, (8, 8, 12), (x, y, bw, bh), border_radius=u // 3)
+        pygame.draw.rect(self.screen, col, (x, y, bw, bh), width=3, border_radius=u // 3)
+        art.draw_skull(self.screen, x + pad, y + (bh - sh) // 2, sc, mood, int(t * 6), t=t, animate=True)
+        # typewriter (types out over ~0.5s) + flash once complete
+        total = 3.2
+        elapsed_in = total - (until - now)          # 0 at start, grows with time
+        reveal = max(1, min(len(text), int(elapsed_in / 0.5 * len(text))))
+        shown = text[:reveal]
+        done = reveal >= len(text)
+        flash = (col if int(t * 6) % 2 else FG) if done else col
+        self.text(shown, self.f_mb, flash, x + sw + pad * 2, y + (bh - self.f_mb.get_height()) // 2)
+
+    def draw_oracle(self, top: int, bottom: int) -> None:
+        u = self.u
+        o = self._oracle or {}
+        t = time.monotonic()
+        sc = max(4, u // 4)
+        sw, sh = art.skull_size(sc)
+        art.draw_skull(self.screen, (self.W - sw) // 2, top + u, sc, o.get("mood", "calm"),
+                       int(t * 3), t=t, animate=True)
+        y = top + u + sh + u
+        self.text("THE DEMON KING SPEAKS", self.f_l, LEVEL_COL[HIGH] if o.get("mood") == "rage" else ACCENT,
+                  self.W // 2, y, center=True)
+        y += int(u * 1.8)
+        # wrap speech
+        for line in self._wrap(o.get("speech", "..."), self.f_m, self.W - u * 4):
+            self.text(line, self.f_m, FG, self.W // 2, y, center=True)
+            y += int(u * 1.2)
+        y += u // 2
+        for act in o.get("actions", []):
+            self.text(act, self.f_m, LEVEL_COL[WARN], self.W // 2, y, center=True, maxw=self.W - u * 3)
+            y += int(u * 1.2)
+        self.text(f"[ advisor: {o.get('via', 'rules')} ]", self.f_s, DIM, self.W // 2, bottom - u, center=True)
+
+    def _wrap(self, text, font, maxw):
+        words = text.split()
+        lines, cur = [], ""
+        for w in words:
+            trial = (cur + " " + w).strip()
+            if font.size(trial)[0] > maxw and cur:
+                lines.append(cur)
+                cur = w
+            else:
+                cur = trial
+        if cur:
+            lines.append(cur)
+        return lines[:6]
+
+    def consult_oracle(self) -> None:
+        from . import agent
+        self._oracle = agent.consult(self.w, self.cfg)
+        self.view = "oracle"
+        self.speak("rogue" if self._oracle.get("mood") == "rage" else "clear", 2.0)
+
     def hints(self) -> list[tuple[str, str]]:
         v = self.view
+        if v == "oracle":
+            return [("A", "ask again"), ("B", "back")]
         if v == "hunt":
             return [("B", "back"), ("Y", "mine"), ("X", "checkpoint"), ("SELECT", "mute")]
+        if v == "detail":
+            d = self.w.devices.get(self.detail_id or "")
         if v == "detail":
             d = self.w.devices.get(self.detail_id or "")
             h = [("A", "hunt"), ("B", "back"), ("Y", "mine"), ("R1", "watchlist")]
@@ -1027,7 +1207,8 @@ class App:
             col = LEVEL_COL[HIGH] if h.get("sev") == "camera" else LEVEL_COL[WARN] if cam else FG
             ports = ",".join(str(p) for p in h.get("ports", [])) or "-"
             tag = "  <== CAMERA/DVR" if h.get("sev") == "camera" else "  <- possible camera" if cam else ""
-            self.text(f"{h.get('ip', '?'):<15} {h.get('vendor') or h.get('mac', '')}{tag}", self.f_m, col, u, ry + u // 6,
+            label = h.get("name") or h.get("vendor") or h.get("mac", "")
+            self.text(f"{h.get('ip', '?'):<15} {label}{tag}", self.f_m, col, u, ry + u // 6,
                       maxw=self.W - u * 10)
             self.text(f"{h.get('mac', '')}   ports: {ports}", self.f_s, DIM, u, ry + int(u * 1.0), maxw=self.W - u * 10)
 
@@ -1037,7 +1218,8 @@ class App:
         sc = max(5, self.H // 44)
         sw, sh = art.skull_size(sc)
         cx = self.W // 2
-        art.draw_skull(self.screen, cx - sw // 2, int(self.H * 0.20), sc, "rage", frame)
+        art.draw_skull(self.screen, cx - sw // 2, int(self.H * 0.20), sc, "rage", frame,
+                       t=time.monotonic(), animate=True)
         y = int(self.H * 0.20) + sh + self.u * 2
         self.text(art.NAME, self.f_title, LEVEL_COL[HIGH], cx, y, center=True)
         y += int(self.u * 2.4)
@@ -1071,10 +1253,13 @@ class App:
             self.draw_scanconfirm(y, bottom)
         elif self.view == "scanview":
             self.draw_scanview(y, bottom)
+        elif self.view == "oracle":
+            self.draw_oracle(y, bottom)
         if self.view == "menu":
             self.draw_menu()
         else:
             self.draw_toast()
+        self.draw_voiceline()
         pygame.display.flip()
 
     # ------------------------------------------------------------------- loop
@@ -1090,9 +1275,9 @@ class App:
                 if a.level >= WARN:
                     self.notify(a.title, a.level, 5.0)
                 if a.level == HIGH:
-                    self.snd.play("alarm")
                     if self.rumble_on:
                         self.inp.rumble(1.0, 600)
+                    self.speak(self._event_for_alert(a))   # voiceline + chiptune sting
                 elif a.level == WARN:
                     self.snd.play("blip")
         self._check_karma()

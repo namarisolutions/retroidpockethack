@@ -455,3 +455,60 @@ def test_world_persists_and_alerts_on_recurrence_across_restart(tmp_path):
     w2.ingest({"t": "ble", "a": "da:11:22:33:44:55", "at": 1, "r": -50, "p": "020106"})
     w2.persist_sightings(min_interval=0)
     assert s2.sighting_summary("da:11:22:33:44:55")["n_days"] == 0
+
+
+# ------------------------------------------------------------------ discovery
+def test_parse_ssdp_and_wsd():
+    from csk import discover
+    h = discover.parse_ssdp("HTTP/1.1 200 OK\r\nSERVER: Linux/3 UPnP/1.0 Hikvision-Webs\r\nST: x\r\n")
+    assert "Hikvision" in h["SERVER"]
+    w = discover.parse_wsd(b"<e><d:Types>dn:NetworkVideoTransmitter</d:Types><d:XAddrs>http://192.168.1.50/onvif/device_service</d:XAddrs></e>")
+    assert w["is_camera"] and "192.168.1.50" in w["ips"]
+
+
+def test_parse_mdns_ptr_and_a():
+    import struct
+    from csk import discover
+    # header: 1 question(skip via building), 1 answer PTR
+    # Build a minimal mDNS response with an A record for a named host.
+    def name(s):
+        out = b""
+        for lab in s.split("."):
+            out += bytes([len(lab)]) + lab.encode()
+        return out + b"\x00"
+    pkt = struct.pack(">HHHHHH", 0, 0x8400, 0, 1, 0, 0)
+    rec = name("reolink-cam.local") + struct.pack(">HHIH", 1, 1, 120, 4) + bytes([192, 168, 1, 7])
+    info = discover.parse_mdns(pkt + rec)
+    assert "192.168.1.7" in info["ips"]
+
+
+def test_discover_camera_hint_and_classify():
+    from csk import discover, netscan
+    disco = {"onvif": True, "services": {"_rtsp._tcp"}, "server": "", "model": "", "names": {"FrontDoor"}}
+    hints = discover.camera_hint(disco)
+    assert any("ONVIF" in h for h in hints) and any("RTSP" in h for h in hints)
+    sev, reasons = netscan.classify_host({"ip": "1", "mac": "a", "ports": [80], "disco": disco}, "", "")
+    assert sev == "camera"
+
+
+# ------------------------------------------------------------------ agent
+def test_agent_rules_quiet_and_threat():
+    from csk import agent
+    clk = Clock()
+    w = World(clock=clk)
+    quiet = agent.consult(w)
+    assert quiet["via"] == "rules" and quiet["mood"] == "calm" and quiet["speech"]
+    # inject a high alert
+    for i in range(6):
+        w.ingest({"t": "ap", "b": "00:c0:ca:00:00:01", "s": f"n{i}".encode().hex(), "ch": 11, "e": 0, "r": -60, "n": 3})
+    w.evaluate()
+    hot = agent.consult(w)
+    assert hot["mood"] in ("alert", "rage") and hot["actions"]
+
+
+def test_agent_summarize_has_expected_keys():
+    from csk import agent
+    w = World(clock=Clock())
+    s = agent.summarize_state(w)
+    for k in ("location", "high", "warn", "followers", "cameras", "trackers", "recurring"):
+        assert k in s

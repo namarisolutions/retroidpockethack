@@ -70,7 +70,7 @@ def _probe_host(ip: str, ports: list[int], timeout: float) -> list[int]:
 
 
 def scan(ip: str | None = None, ports: list[int] | None = None, timeout: float = 0.4,
-         workers: int = 128) -> dict:
+         workers: int = 128, discover_services: bool = True) -> dict:
     """Scan the local /24. Returns {ts, cidr, hosts:[{ip,mac,ports}...]}.
 
     This is the default backend; the monitor accepts any callable with the same
@@ -89,9 +89,24 @@ def scan(ip: str | None = None, ports: list[int] | None = None, timeout: float =
             if op:
                 port_map[futs[fut]] = op
     arp = read_arp()
+    disco = {}
+    if discover_services:
+        try:
+            from . import discover as _disc
+            disco = _disc.discover()
+        except Exception:
+            disco = {}
     hosts = []
-    for host_ip in sorted(set(port_map) | set(arp), key=lambda s: tuple(int(x) for x in s.split("."))):
-        hosts.append({"ip": host_ip, "mac": arp.get(host_ip, ""), "ports": sorted(port_map.get(host_ip, []))})
+    for host_ip in sorted(set(port_map) | set(arp) | set(disco),
+                          key=lambda s: tuple(int(x) for x in s.split("."))):
+        h = {"ip": host_ip, "mac": arp.get(host_ip, ""), "ports": sorted(port_map.get(host_ip, []))}
+        if host_ip in disco:
+            h["disco"] = disco[host_ip]
+            from . import discover as _disc
+            lbl = _disc.label(disco[host_ip])
+            if lbl:
+                h["name"] = lbl
+        hosts.append(h)
     return {"ts": time.time(), "cidr": ".".join(ip.split(".")[:3]) + ".0/24", "self_ip": ip, "hosts": hosts}
 
 
@@ -105,7 +120,15 @@ def classify_host(host: dict, vendor: str, category: str) -> tuple[str, list[str
         reasons.append("camera/DVR service ports open: " + ", ".join(sorted(set(cam_ports))))
     if 554 in host["ports"] or 8554 in host["ports"]:
         reasons.append("RTSP video stream endpoint present")
+    disco = host.get("disco") or {}
+    disco_cam = False
+    if disco:
+        from . import discover
+        hints = discover.camera_hint(disco)
+        reasons += hints
+        disco_cam = disco.get("onvif") or any("RTSP" in h or "ONVIF" in h for h in hints)
     if reasons:
-        strong = category == "camera" or any(p in host["ports"] for p in (554, 8554, 37777, 34567))
+        strong = (category == "camera" or disco_cam
+                  or any(p in host["ports"] for p in (554, 8554, 37777, 34567)))
         return ("camera" if strong else "suspect"), reasons
     return "", reasons

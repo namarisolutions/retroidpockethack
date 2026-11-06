@@ -67,15 +67,48 @@ def skull_size(scale: int) -> tuple[int, int]:
     return (16 * scale, len(_SKULL) * scale)
 
 
-def draw_skull(surf, x: int, y: int, scale: int = 4, mood: str = "calm", frame: int = 0) -> None:
-    """mood: 'calm' | 'alert' | 'rage'. frame animates flames/eyes."""
-    eye = {"calm": "y", "alert": "p", "rage": "p"}.get(mood, "e")
+import math as _math
+
+# Closed-eye row override (blink): eye sockets become bone.
+_BLINK_ROWS = {7: "..BBBBBSSBBBBB..", 8: "..BBBSSSSSBBBB..", 9: "..BBBBBSSBBBBB.."}
+
+
+def anim_offset(mood: str, t: float) -> tuple[int, int, bool]:
+    """Idle motion: returns (dx, dy, blink) given seconds t.
+
+    - calm: gentle vertical bob, occasional blink
+    - alert: faster bob, a little horizontal sway
+    - rage: jittery shake
+    """
     if mood == "rage":
-        # flicker the eyes
+        dx = int(_math.sin(t * 37) * 2)
+        dy = int(_math.cos(t * 31) * 2)
+        return dx, dy, False
+    if mood == "alert":
+        return int(_math.sin(t * 5) * 1), int(_math.sin(t * 6) * 2), False
+    # calm: bob + blink ~ every 3.3s for 120ms
+    dy = int(round(_math.sin(t * 1.6) * 2))
+    blink = (t % 3.3) < 0.12
+    return 0, dy, blink
+
+
+def draw_skull(surf, x: int, y: int, scale: int = 4, mood: str = "calm", frame: int = 0,
+               t: float | None = None, animate: bool = False) -> None:
+    """mood: 'calm' | 'alert' | 'rage'. frame animates flames/eyes; if animate and t
+    given, adds idle bob/sway/shake and blinking."""
+    eye = {"calm": "y", "alert": "p", "rage": "p"}.get(mood, "e")
+    blink = False
+    if animate and t is not None:
+        dx, dy, blink = anim_offset(mood, t)
+        x, y = x + dx * scale // 1, y + dy
+    grid = _SKULL
+    if blink:
+        grid = [_BLINK_ROWS.get(i, row) for i, row in enumerate(_SKULL)]
+    if mood == "rage":
         eye = "p" if frame % 2 == 0 else "f"
         fl = _FLAMES if frame % 2 == 0 else [r.replace("F", "f") for r in _FLAMES]
         _draw_grid(surf, fl, x, y - len(_FLAMES) * scale, scale, eye)
-    _draw_grid(surf, _SKULL, x, y, scale, eye)
+    _draw_grid(surf, grid, x, y, scale, eye)
 
 
 NAME = "THE UNKILLABLE DEMON KING"

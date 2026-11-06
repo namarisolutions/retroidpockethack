@@ -92,7 +92,8 @@ def oneshot_scan() -> int:
         sev, reasons = netscan.classify_host(h, vendor, cat)
         tag = {"camera": "  <== CAMERA/DVR", "suspect": "  <- possible camera"}.get(sev, "")
         ports = ",".join(str(p) for p in h["ports"]) or "-"
-        print(f"{h['ip']:15} {h['mac'] or '??:??':17} {vendor or cat or '':20} ports:{ports}{tag}")
+        nm = f"  [{h['name']}]" if h.get('name') else ""
+        print(f"{h['ip']:15} {h['mac'] or '??:??':17} {vendor or cat or '':20} ports:{ports}{nm}{tag}")
         for r in reasons:
             print(f"                ! {r}")
     cams = sum(1 for h in hosts if netscan.classify_host(h, *oui.lookup(h['mac']) if h['mac'] else ('', ''))[0] == 'camera')
