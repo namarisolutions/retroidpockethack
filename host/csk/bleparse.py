@@ -88,10 +88,15 @@ def _apple(d: bytes) -> Classification:
     return Classification("phone" if "iPhone" in label or label == "Apple device" else "wearable", label, INFO, stable_id=False)
 
 
+UUID_ODID = 0xFFFA            # ASTM - Open Drone ID / FAA Remote ID
+
+
 def classify(adv: Adv) -> Classification:
     sd = adv.service_data
     uu = set(adv.uuids16) | set(sd)
 
+    if UUID_ODID in sd and sd[UUID_ODID][:1] == b"\x0d":
+        return Classification("drone", "Drone (Remote ID)", HIGH)
     if UUID_DULT in uu:
         return Classification("tracker", "Tracker in unwanted-tracking mode (DULT)", HIGH)
     if UUID_GOOGLE_FMDN in sd and sd[UUID_GOOGLE_FMDN][:1] in (b"\x40", b"\x41"):

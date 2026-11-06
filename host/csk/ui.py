@@ -37,7 +37,8 @@ ACCENT = (86, 204, 255)
 SEL_BG = SURFACE_SEL
 LEVEL_COL = {INFO: (120, 190, 230), WARN: (255, 183, 59), HIGH: (255, 86, 92)}
 LEVEL_NAME = {INFO: "INFO", WARN: "WARN", HIGH: "HIGH"}
-CAT_COL = {"tracker": (255, 130, 95), "camera": (255, 183, 59), "alpr": (255, 183, 59), "iot": (188, 170, 255)}
+CAT_COL = {"tracker": (255, 130, 95), "camera": (255, 183, 59), "alpr": (255, 183, 59),
+           "iot": (188, 170, 255), "drone": (120, 230, 255)}
 GOOD = (72, 214, 138)
 
 
@@ -251,6 +252,7 @@ class App:
         "tracker": ["A BEACON CLINGS TO YOU.", "YOU ARE BEING TAGGED.", "SHAKE OFF THIS PARASITE."],
         "deauth": ["AN ATTACK UPON THE AIR!", "SOMEONE SEVERS THE SIGNAL."],
         "follow": ["A SHADOW MOVES AS YOU MOVE.", "YOU ARE FOLLOWED. I AM CERTAIN."],
+        "drone": ["A MACHINE WATCHES FROM ABOVE.", "WINGS IN THE SKY. I SEE ITS MASTER.", "EYES IN THE AIR. I HAVE ITS PILOT."],
         "clear": ["THE AIR IS CLEAN... FOR NOW.", "ALL IS QUIET. I REMAIN VIGILANT."],
     }
 
@@ -262,7 +264,7 @@ class App:
         mood = {"boot": "rage", "clear": "calm"}.get(event, "rage" if event in ("rogue", "deauth") else "alert")
         self.voiceline = (random.choice(lines), mood, time.monotonic() + secs)
         self.snd.play({"boot": "boot", "rogue": "rogue", "camera": "camera", "tracker": "tracker",
-                       "deauth": "rage", "follow": "found", "clear": "clear"}.get(event, "blip"))
+                       "deauth": "rage", "follow": "found", "drone": "camera", "clear": "clear"}.get(event, "blip"))
 
     def _event_for_alert(self, a) -> str:
         t = a.title.lower()
@@ -274,6 +276,8 @@ class App:
             return "camera"
         if "tracker" in t or "find my" in t or "tile" in t or "tag" in t:
             return "tracker"
+        if "drone" in t:
+            return "drone"
         if "following" in t or "seen repeatedly" in t:
             return "follow"
         return "rogue"
@@ -944,6 +948,22 @@ class App:
             lines.append(("Uplink", f"{d.uplink_bps(now) / 1000:.1f} kB/s"))
             if d.ssids:
                 lines.append(("Probing for", ", ".join(sorted(d.ssids))))
+        if d.drone:
+            dr = d.drone
+            if dr.get("serial"):
+                lines.append(("Drone serial", dr["serial"]))
+            if dr.get("ua_type"):
+                lines.append(("Drone type", dr["ua_type"]))
+            if dr.get("lat") is not None:
+                alt = f"  alt {dr.get('alt_geo_m')}m" if dr.get("alt_geo_m") is not None else ""
+                lines.append(("Drone position", f"{dr['lat']:.6f}, {dr['lon']:.6f}{alt}"))
+            if dr.get("speed_ms") is not None:
+                lines.append(("Drone speed", f"{dr['speed_ms']} m/s"))
+            if dr.get("operator_lat") is not None:
+                lines.append(("OPERATOR location", f"{dr['operator_lat']:.6f}, {dr['operator_lon']:.6f}"))
+            if dr.get("operator_id"):
+                lines.append(("Operator ID", dr["operator_id"]))
+            lines.append(("Remote ID via", dr.get("via", "BLE")))
         if d.raw:
             lines.append(("Adv payload", d.raw))
         if d.fps:

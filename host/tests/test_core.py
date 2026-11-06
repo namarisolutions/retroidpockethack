@@ -557,3 +557,42 @@ def test_detect_endpoint_none_when_down(monkeypatch):
     # and consult falls back to rules
     out = agent.consult(World(clock=Clock()), {"agent": {"backend": "auto"}})
     assert out["via"] == "rules"
+
+
+# ------------------------------------------------------------------ drone remote id
+def test_droneid_decode_ble_roundtrip():
+    from csk import droneid
+    payload = droneid.build_pack_ble(serial="ABC123XYZ", lat=51.5, lon=-0.12, op_lat=51.501, op_lon=-0.119)
+    info = droneid.from_ble(payload)
+    assert info and info["serial"] == "ABC123XYZ" and info["via"] == "BLE"
+    assert abs(info["lat"] - 51.5) < 1e-5 and abs(info["operator_lat"] - 51.501) < 1e-5
+
+
+def test_droneid_not_a_drone():
+    from csk import droneid
+    assert droneid.from_ble(bytes.fromhex("020106030300ff")) is None
+
+
+def test_world_drone_alert_with_operator_location():
+    from csk import droneid
+    clk = Clock()
+    w = World(clock=clk)
+    p = droneid.build_pack_ble(serial="DJI-RID-77", lat=40.0, lon=-73.0, op_lat=40.001, op_lon=-73.002).hex()
+    w.ingest({"t": "ble", "a": "d0:21:f0:00:00:01", "at": 1, "r": -55, "p": p})
+    d = w.devices["ble:d0:21:f0:00:00:01"]
+    assert d.category == "drone" and d.drone["serial"] == "DJI-RID-77"
+    w.evaluate()
+    a = w.alerts["drone:ble:d0:21:f0:00:00:01"]
+    assert a.level == HIGH and "operator at 40.001" in a.detail and "DJI-RID-77" in a.detail
+
+
+def test_world_drone_wifi_odid_message():
+    from csk import droneid
+    w = World(clock=Clock())
+    pack = droneid.build_pack_ble(serial="WIFI-DRONE")
+    # firmware forwards just the ODID message pack (strip the BLE AD + service header)
+    i = pack.index(bytes([0xFA, 0xFF, 0x0D, 0x00])) + 4
+    w.ingest({"t": "odid", "a": "aa:bb:cc:dd:ee:ff", "r": -60, "p": pack[i:].hex()})
+    w.evaluate()
+    d = w.devices["ble:odid:aa:bb:cc:dd:ee:ff"]
+    assert d.category == "drone" and d.drone["serial"] == "WIFI-DRONE" and d.drone["via"] == "WiFi"

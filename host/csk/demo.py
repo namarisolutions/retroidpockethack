@@ -101,6 +101,12 @@ class DemoSource(Source):
             # BLE every tick
             rs = -55 + int(6 * math.sin(tick / 9)) + r.randrange(-3, 4)
             self._emit(json.dumps({"t": "ble", "a": airtag, "at": 1, "r": rs, "p": AIRTAG_PAYLOAD}))
+            if loc >= 1:   # a Remote-ID drone appears after you've moved once
+                from . import droneid
+                dp = droneid.build_pack_ble(serial="1581F7ABC900", lat=37.7749 + loc * 1e-4,
+                                            lon=-122.4194, op_lat=37.7752, op_lon=-122.4190).hex()
+                self._emit(json.dumps({"t": "ble", "a": "d0:21:f0:aa:bb:cc", "at": 1,
+                                       "r": -62 + r.randrange(-5, 5), "p": dp}))
             if loc % 2 == 0:
                 self._emit(json.dumps({"t": "ble", "a": stranger_watch, "at": 0, "r": -70 + r.randrange(-4, 4),
                                        "p": "02010609094d6920426e6420"}))

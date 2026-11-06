@@ -16,7 +16,7 @@ import time
 from collections import deque
 from dataclasses import dataclass, field
 
-from . import bleparse, oui
+from . import bleparse, droneid, oui
 from .bleparse import HIGH, INFO, WARN
 
 CONFIG_DIR = os.path.expanduser(os.environ.get("CSK_CONFIG_DIR", "~/.config/csk"))
@@ -99,6 +99,7 @@ class Device:
     fps: set = field(default_factory=set)            # AP beacon fingerprints
     karma: bool = False                              # answered a canary probe
     suspicion: list = field(default_factory=list)    # reasons (filled by evaluate)
+    drone: dict = field(default_factory=dict)        # decoded Open Drone ID / Remote ID
 
     def seen(self, now: float, rssi: int, cp: int) -> None:
         self.last = now
@@ -277,8 +278,22 @@ class World:
                         c = bleparse.Classification("camera", f"{d.vendor} device", WARN)
                 if c.category or not d.category:
                     d.category, d.label, d.base_level, d.stable_id = c.category, c.label, c.level, c.stable_id
-                if adv.name and adv.name not in d.label:
+                if c.category == "drone":
+                    info = droneid.from_ble(payload)
+                    if info:
+                        d.drone.update(info)
+                        d.label = droneid.summary(d.drone)
+                elif adv.name and adv.name not in d.label:
                     d.label = f"{d.label} '{adv.name}'" if d.label else adv.name
+            d.seen(now, msg.get("r", -127), cp)
+        elif t == "odid":            # WiFi Remote ID forwarded by firmware (addr = AP BSSID)
+            addr = msg["a"]
+            d = self._dev("ble:odid:" + addr, "ble", addr, now)
+            info = droneid.from_odid_hex(msg.get("p", ""))
+            if info:
+                d.drone.update(info)
+                d.category, d.base_level, d.stable_id = "drone", HIGH, True
+                d.label = droneid.summary(d.drone)
             d.seen(now, msg.get("r", -127), cp)
         elif t == "ap":
             b = msg["b"]
@@ -354,7 +369,20 @@ class World:
             following = d.stable_id and d.category != "random" and len(d.checkpoints) >= FOLLOW_CHECKPOINTS
 
             # Trackers
-            if d.category == "tracker":
+            if d.category == "drone":
+                det = []
+                dr = d.drone
+                if dr.get("operator_lat") is not None:
+                    det.append(f"operator at {dr['operator_lat']:.5f},{dr['operator_lon']:.5f}")
+                if dr.get("lat") is not None:
+                    det.append(f"drone at {dr['lat']:.5f},{dr['lon']:.5f}")
+                if dr.get("serial"):
+                    det.append(f"serial {dr['serial']}")
+                det.append(f"{d.rssi} dBm via {dr.get('via', 'BLE')}")
+                self._raise(found, "drone:" + d.id, HIGH, d.label or "Drone (Remote ID)",
+                            ", ".join(det), d.id)
+
+            elif d.category == "tracker":
                 lvl = d.base_level
                 why = []
                 if span >= PERSIST_MIN_SPAN and ratio >= PERSIST_MIN_RATIO and d.stable_id:

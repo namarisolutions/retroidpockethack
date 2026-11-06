@@ -196,6 +196,22 @@ New HIGH alerts sound an alarm and rumble.
 4. Non-Steam launchers that grab the pad exclusively: `CSK_GPTOKEYB=1 ./run.sh`
    (uses `csk.gptk`).
 
+## Drone Remote ID (who's flying overhead - and where the pilot is)
+
+FAA / ASTM F3411 Remote ID drones broadcast their serial, live position and
+**the operator's location** in the clear. Most do it over Bluetooth LE, which
+the firmware already forwards, so `droneid.py` decodes it **host-side with no
+reflash**. A drone in range raises a HIGH alert and its detail page shows:
+
+- drone serial + aircraft type
+- drone position, altitude, speed
+- **OPERATOR (pilot) GPS location** and operator ID
+
+WiFi-broadcast Remote ID is decoded by the same module (ingest a `odid`
+message); forwarding it from the ESP32 is a future firmware add (the beacon
+event buffer is too small for a full message pack today).
+
+## The Demon King speaks
 ## The Demon King speaks (personality + advisor)
 
 - **Voicelines + chiptune:** on each HIGH threat the Demon King barks a short
@@ -299,7 +315,8 @@ included user systemd unit — see the header of
 ```
 firmware/            PlatformIO project (ESP32 sniffer, JSON-lines protocol)
 host/csk/            Python app
-  bleparse.py        BLE advert decoding + tracker signatures
+  bleparse.py        BLE advert decoding + tracker/drone signatures
+  droneid.py         Open Drone ID / FAA Remote ID decoder (drone + operator location)
   oui.py             MAC vendor → camera/IoT category
   world.py           device registry + all detectors
   controls.py        gamepad/keyboard → actions (SDL controller, raw joystick, gptokeyb)
