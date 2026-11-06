@@ -1,0 +1,9 @@
+# Let the logged-in user open ESP32 USB-serial adapters without root.
+# uaccess = the active seat user gets access (works in SteamOS Game Mode and Desktop Mode).
+# CP2102/CP2104 (DOIT DevKit V1 and most WROOM boards)
+SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", MODE="0660", GROUP="uucp", TAG+="uaccess", SYMLINK+="csk-esp32"
+# CH340/CH341
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="7523", MODE="0660", GROUP="uucp", TAG+="uaccess", SYMLINK+="csk-esp32"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="55d4", MODE="0660", GROUP="uucp", TAG+="uaccess", SYMLINK+="csk-esp32"
+# Native USB (ESP32-S3/C3 USB-Serial-JTAG)
+SUBSYSTEM=="tty", ATTRS{idVendor}=="303a", MODE="0660", GROUP="uucp", TAG+="uaccess", SYMLINK+="csk-esp32"

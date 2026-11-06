@@ -1,0 +1,22 @@
+# gptokeyb mapping for CSK. Only needed if your launcher grabs the gamepad
+# and SDL can't see it directly. Run with:  CSK_GPTOKEYB=1 ./run.sh
+# (gptokeyb uses positional SDL names: a = bottom button, b = right, x = left, y = top)
+back = backspace
+start = enter
+up = up
+down = down
+left = left
+right = right
+left_analog_up = up
+left_analog_down = down
+left_analog_left = left
+left_analog_right = right
+a = z
+b = x
+x = a
+y = c
+l1 = q
+r1 = e
+l2 = 1
+r2 = 3
+guide = h

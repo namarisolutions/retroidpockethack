@@ -1,0 +1,2 @@
+pyserial>=3.5
+pygame-ce>=2.4   # has aarch64 wheels; plain pygame>=2.1 also works

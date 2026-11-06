@@ -1,0 +1,6 @@
+.pio/
+__pycache__/
+*.pyc
+.pytest_cache/
+host/csk/data/oui_full.csv
+host/.venv/
