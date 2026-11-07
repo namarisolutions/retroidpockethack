@@ -150,7 +150,7 @@ saved.
 | Button | Action |
 |---|---|
 | D-pad / left stick | move selection (hold to scroll) |
-| L1 / R1 (or D-pad ←/→) | switch tab: Alerts · **Map** · BLE · Networks · Clients · Follow |
+| L1 / R1 (or D-pad ←/→) | switch tab: Alerts · **Radar** · Map · BLE · Networks · Clients · Follow · History · **Souls** |
 | L2 / R2 | page up / down |
 | **A** | open device → press A again to **hunt** it |
 | **B** | back |
@@ -237,6 +237,18 @@ WiFi-broadcast Remote ID is decoded by the same module (ingest a `odid`
 message); forwarding it from the ESP32 is a future firmware add (the beacon
 event buffer is too small for a full message pack today).
 
+## Toys
+
+- **RADAR tab:** a sweeping radar plots every device in range as a blip -
+  distance from centre = signal strength, colour = category (trackers, cameras,
+  drones stand out). The selected contact shows its true name (see Souls).
+- **SOULS / bestiary:** the King names every device it detects - a deterministic
+  monster name from the MAC (e.g. an AirTag becomes the "Writhing Revenant",
+  ranked EYE-TYRANT / PARASITE / SKY-DEMON by category). Pure flavour.
+- **Themes** (Menu > Theme): Hellfire (default), green Phosphor CRT, Amber CRT,
+  and Ice. Threat colours stay meaningful in every theme.
+
+## The Demon King speaks
 ## The Demon King speaks
 ## The Demon King speaks (personality + advisor)
 
@@ -369,6 +381,7 @@ host/csk/            Python app
   agent.py           on-device advisor (auto: local LLM if running, else rules)
   llm/setup-llm.sh   install + run a tiny local LLM (llama.cpp) on the device
   art.py             pixel-art Demon King mascot + idle/blink/rage animations
+  bestiary.py        turns each device into a named monster "soul" (radar + souls tab)
 host/tests/          pytest suite (python3 -m pytest host/tests)
 ```
 

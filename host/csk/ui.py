@@ -63,7 +63,34 @@ def _load_font(size: int, bold: bool = False):
     f.set_bold(bold)
     return f
 
-TABS = ["ALERTS", "MAP", "BLE", "NETWORKS", "CLIENTS", "FOLLOW", "HISTORY"]
+TABS = ["ALERTS", "RADAR", "MAP", "BLE", "NETWORKS", "CLIENTS", "FOLLOW", "HISTORY", "SOULS"]
+
+# Selectable colour themes (toy): overrides the base palette tokens.
+THEMES = {
+    "hellfire": {},   # default (defined by the module constants)
+    "phosphor": dict(BG=(2, 10, 4), PANEL=(6, 18, 9), SURFACE=(8, 24, 12), SURFACE_SEL=(12, 40, 18),
+                     BORDER=(18, 50, 24), FG=(120, 255, 150), DIM=(70, 150, 90), FAINT=(20, 60, 30),
+                     ACCENT=(90, 255, 140), GOOD=(120, 255, 150)),
+    "amber": dict(BG=(14, 8, 0), PANEL=(26, 15, 2), SURFACE=(34, 20, 4), SURFACE_SEL=(58, 34, 6),
+                  BORDER=(64, 40, 10), FG=(255, 200, 90), DIM=(170, 120, 50), FAINT=(70, 45, 12),
+                  ACCENT=(255, 190, 60), GOOD=(255, 210, 90)),
+    "ice": dict(BG=(6, 10, 16), PANEL=(12, 18, 28), SURFACE=(16, 24, 36), SURFACE_SEL=(24, 40, 60),
+                BORDER=(32, 46, 66), FG=(210, 234, 255), DIM=(120, 150, 180), FAINT=(40, 54, 74),
+                ACCENT=(120, 200, 255), GOOD=(120, 230, 200)),
+}
+THEME_ORDER = ["hellfire", "phosphor", "amber", "ice"]
+_BASE_THEME = {}   # filled on first apply
+
+
+def apply_theme(name: str) -> None:
+    """Mutate the module-level palette globals so all draw code picks it up."""
+    g = globals()
+    keys = ("BG", "PANEL", "SURFACE", "SURFACE_SEL", "BORDER", "FG", "DIM", "FAINT", "ACCENT", "GOOD")
+    if not _BASE_THEME:
+        _BASE_THEME.update({k: g[k] for k in keys})
+    g.update(_BASE_THEME)                         # reset to default first
+    g.update(THEMES.get(name, {}))
+    g["SEL_BG"] = g["SURFACE_SEL"]
 
 
 class MapRow:
@@ -213,6 +240,8 @@ class App:
         self.snd = Sound()
         self.snd.muted = self.cfg.get("muted", False)
         self.rumble_on = self.cfg.get("rumble", True)
+        self.theme = self.cfg.get("theme", "hellfire")
+        apply_theme(self.theme)
         self.tab = 0
         self.sel = {t: 0 for t in TABS}
         self.view = "list"          # list | detail | hunt | menu | buttontest
@@ -308,7 +337,7 @@ class App:
 
     def save(self) -> None:
         self.cfg.update(layout=self.inp.layout, muted=self.snd.muted, rumble=self.rumble_on,
-                        locations=self.locations)
+                        locations=self.locations, theme=self.theme)
         save_config(self.cfg)
 
     def rssi_bar(self, x, y, w, h, rssi, col=ACCENT):
@@ -364,6 +393,10 @@ class App:
             return self.w.recent(("wifi",))
         if name == "HISTORY":
             return self.w.store.recurring(min_locations=1, min_days=1) if self.w.store else []
+        if name == "RADAR":
+            return self.w.recent(("ble", "wifi", "ap"), within=120.0)
+        if name == "SOULS":
+            return self.w.recent(("ble", "wifi", "ap"), within=86400.0)
         return self.w.followers()
 
     def selected_device_id(self) -> str | None:
@@ -383,14 +416,15 @@ class App:
     # ---------------------------------------------------------------- actions
     MENU = ["Resume", "Consult the Demon King", "Location", "Face buttons", "Sound", "Rumble",
             "BLE scanning", "WiFi scanning", "Mark everything visible as mine", "Export signed report",
-            "Clear alerts", "Button test", "PANIC WIPE (erase all data)", "Quit"]
+            "Clear alerts", "Button test", "Theme", "PANIC WIPE (erase all data)", "Quit"]
 
     def menu_value(self, i: int) -> str:
         s = self.w.sensor
         return {2: self.w.location + "  (A to change)",
                 3: self.inp.layout.upper() + (" (A right)" if self.inp.layout == "nintendo" else " (A bottom)"),
                 4: "OFF" if self.snd.muted else "ON", 5: "ON" if self.rumble_on else "OFF",
-                6: "ON" if s.get("ble", 1) else "OFF", 7: "ON" if s.get("wifi", 1) else "OFF"}.get(i, "")
+                6: "ON" if s.get("ble", 1) else "OFF", 7: "ON" if s.get("wifi", 1) else "OFF",
+                12: self.theme.upper() + "  (A to change)"}.get(i, "")
 
     def menu_activate(self, i: int) -> None:
         if i == 0:
@@ -429,11 +463,19 @@ class App:
             self.view = "buttontest"
             self._bt_started = time.monotonic()
         elif i == 12:
+            self.cycle_theme()
+        elif i == 13:
             self.view = "wipeconfirm"
             self._wipe_hold = 0.0
-        elif i == 13:
+        elif i == 14:
             self.running = False
         self.save()
+
+    def cycle_theme(self) -> None:
+        i = (THEME_ORDER.index(self.theme) + 1) % len(THEME_ORDER) if self.theme in THEME_ORDER else 0
+        self.theme = THEME_ORDER[i]
+        apply_theme(self.theme)
+        self.notify(f"Theme: {self.theme}")
 
     def cycle_location(self) -> None:
         if not self.locations:
@@ -759,6 +801,7 @@ class App:
             msg = {"ALERTS": "No alerts. Scanning...", "FOLLOW": "Press X each time you've moved somewhere new.",
                    "MAP": "No WiFi clients associated yet. Listening...",
                    "HISTORY": "No history yet. Set your Location (menu) at each place you go;\ndevices that reappear across places/days are remembered here - even after a restart.",
+                   "SOULS": "No souls claimed yet. Every device the King detects is bound here, named.",
                    }.get(tab, "Nothing seen yet")
             self.text(msg, self.f_m, DIM, self.W // 2, top + u * 2, center=True)
             if tab == "FOLLOW":
@@ -782,6 +825,8 @@ class App:
                 self._row_map(it, y, row_h, now)
             elif tab == "HISTORY":
                 self._row_history(it, y, row_h, now)
+            elif tab == "SOULS":
+                self._row_soul(it, y, row_h, now)
             else:
                 self._row_device(it, y, row_h, now, tab)
         if len(items) > rows:  # scrollbar
@@ -789,6 +834,57 @@ class App:
             sb_h = max(u, track * rows / len(items))
             sb_y = top + (track - sb_h) * start / max(1, len(items) - rows)
             pygame.draw.rect(self.screen, FAINT, (self.W - u // 3, int(sb_y), 5, int(sb_h)), border_radius=3)
+
+    def draw_radar(self, top: int, bottom: int) -> None:
+        from . import bestiary
+        u = self.u
+        items = self.items()
+        cx, cy = self.W // 2, (top + bottom) // 2
+        maxR = min(self.W, bottom - top) // 2 - u
+        now = self.w.clock()
+        t = time.monotonic()
+        # rings + cross
+        for frac in (0.33, 0.66, 1.0):
+            pygame.draw.circle(self.screen, BORDER, (cx, cy), int(maxR * frac), 1)
+        pygame.draw.line(self.screen, FAINT, (cx - maxR, cy), (cx + maxR, cy), 1)
+        pygame.draw.line(self.screen, FAINT, (cx, cy - maxR), (cx, cy + maxR), 1)
+        self.text("-30", self.f_s, FAINT, cx + 2, cy - int(maxR * 0.33) - u)
+        self.text("-100 dBm", self.f_s, FAINT, cx + 2, cy - maxR - u)
+        # sweeping beam
+        sweep = (t * 90) % 360
+        sa = math.radians(sweep)
+        for i in range(26):                        # fading trail
+            a = math.radians(sweep - i * 2)
+            fade = max(0, 40 - i * 2)
+            pygame.draw.line(self.screen, (ACCENT[0] * fade // 60, ACCENT[1] * fade // 60, ACCENT[2] * fade // 60),
+                             (cx, cy), (cx + maxR * math.cos(a), cy + maxR * math.sin(a)), 2)
+        if not items:
+            self.text("no contacts in range", self.f_m, DIM, cx, bottom - u * 2, center=True)
+        sel = min(self.sel["RADAR"], max(0, len(items) - 1))
+        self.sel["RADAR"] = sel
+        for i, d in enumerate(items):
+            ang = (bestiary._h(d.addr) % 3600) / 10.0   # stable bearing from MAC
+            frac = 1.0 - max(0.0, min(1.0, (d.rssi + 100) / 70))
+            r = maxR * (0.08 + 0.92 * frac)
+            bx = cx + r * math.cos(math.radians(ang))
+            by = cy + r * math.sin(math.radians(ang))
+            col = CAT_COL.get(d.category, ACCENT if d.kind == "ap" else FG)
+            # ping brighten when the beam passes near this bearing
+            dd = (sweep - ang) % 360
+            near = dd < 30
+            rad = u // 3 + (u // 4 if near else 0)
+            if d.category in ("tracker", "camera", "drone", "alpr"):
+                rad += u // 6
+            pygame.draw.circle(self.screen, col, (int(bx), int(by)), rad)
+            if i == sel:
+                pygame.draw.circle(self.screen, FG, (int(bx), int(by)), rad + u // 3, 2)
+        # selected contact label
+        if items:
+            d = items[sel]
+            name = bestiary.monster_name(d.addr)
+            self.text(name, self.f_mb, CAT_COL.get(d.category, ACCENT), cx, bottom - int(u * 2.2), center=True)
+            self.text(f"{d.title()}   {d.addr}   {d.rssi} dBm", self.f_s, DIM, cx, bottom - u, center=True)
+        self.text(f"{len(items)} contacts", self.f_s, DIM, self._lx(), top + u // 2)
 
     def _row_accent(self, tab, it, now):
         """Left-spine accent colour per row, or None."""
@@ -897,6 +993,18 @@ class App:
         self.text(f"{r['n_locations']} place(s)", self.f_mb, col, rx, y + u // 4, right=True)
         span = ago(now - r["last"]) if r["last"] else "?"
         self.text(f"{r['n_days']} day(s) - last {span} ago", self.f_s, DIM, rx, y + int(u * 1.3), right=True)
+
+    def _row_soul(self, d, y, h, now):
+        from . import bestiary
+        u = self.u
+        lx, rx = self._lx(), self._rx()
+        cat = d.category
+        col = CAT_COL.get(d.category, FG)
+        self.text(bestiary.monster_name(d.addr), self.f_mb, col, lx, y + u // 5, maxw=rx - lx - u * 8)
+        sub = f"{bestiary.rank(cat)}   ·   {d.title()}   ·   {d.addr}"
+        self.text(sub, self.f_s, DIM, lx, y + int(u * 1.3), maxw=rx - lx - u * 8)
+        self.text(f"{d.rssi} dBm", self.f_m, col, rx, y + u // 4, right=True)
+        self.text("claimed " + ago(now - d.first) + " ago", self.f_s, DIM, rx, y + int(u * 1.3), right=True)
 
     def _row_device(self, d, y, h, now, tab):
         u = self.u
@@ -1339,7 +1447,10 @@ class App:
             y = self.draw_tabs(y)
         bottom = self.draw_footer(self.hints() if self.view != "menu" else [("A", "select"), ("B", "close")])
         if self.view in ("list", "menu"):
-            self.draw_list(y, bottom)
+            if TABS[self.tab] == "RADAR":
+                self.draw_radar(y, bottom)
+            else:
+                self.draw_list(y, bottom)
         elif self.view == "detail":
             self.draw_detail(y, bottom)
         elif self.view == "hunt":

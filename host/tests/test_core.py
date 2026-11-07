@@ -682,3 +682,23 @@ def test_oui_expanded_cameras():
     oui._db = None
     oui.SEED["F0B429"] = "Eufy Security"       # exercise keyword path
     assert oui.lookup("F0:B4:29:00:00:01")[1] == "camera"
+
+
+# ------------------------------------------------------------------ toys
+def test_bestiary_deterministic():
+    from csk import bestiary
+    n1 = bestiary.monster_name("aa:bb:cc:dd:ee:ff")
+    n2 = bestiary.monster_name("AA:BB:CC:DD:EE:FF")
+    assert n1 == n2 and len(n1) > 3
+    assert bestiary.monster_name("11:22:33:44:55:66") != n1
+    assert bestiary.rank("camera") == "EYE-TYRANT"
+
+
+def test_theme_apply_changes_palette():
+    import csk.ui as U
+    U.apply_theme("hellfire")
+    base_bg = U.BG
+    U.apply_theme("phosphor")
+    assert U.BG != base_bg and U.FG[1] > U.FG[0]      # greenish
+    U.apply_theme("hellfire")
+    assert U.BG == base_bg                            # resets cleanly
