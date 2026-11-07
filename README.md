@@ -46,6 +46,30 @@ Devices with randomized MACs can't be tracked across locations. That's by
 design, and it also means they won't false-alarm. Treat alerts as leads to
 check, not proof.
 
+## Verify everything works (self-test)
+
+Before trusting a live sweep, run the built-in diagnostic:
+
+```sh
+./run.sh --selftest        # or: csk --selftest
+```
+
+It checks that every module imports, the config/log dirs are writable, and the
+full detector pipeline fires on the simulated sensor (trackers, cameras, rogue
+AP, fake hotspot, drone Remote ID). If an ESP32 is plugged in it also confirms
+the firmware is talking (`hello` + chip/MAC). Exit code is non-zero on failure,
+so it's CI-friendly too. A clean run looks like:
+
+```
+[ OK ] core modules import        12 modules
+[ OK ] detector: trackers         fired
+[ OK ] detector: cameras          fired
+[ OK ] detector: drone Remote ID  fired
+[ OK ] ESP32 firmware             /dev/ttyUSB0: csk-0.1.0 / ESP32 mac ...
+ALL CHECKS PASSED
+```
+
+## 1. Flash the ESP32 (from a PC)
 ## 1. Flash the ESP32 (from a PC)
 
 ```sh
@@ -339,6 +363,7 @@ host/csk/            Python app
   wifi.py / apscan.py  join a chosen AP and scan what's behind it (nmcli), then restore
   monitor.py         headless RF+LAN defense loop
   dashboard.py       read-only web dashboard for the monitor (view from your phone)
+  selftest.py        bring-up diagnostic (csk --selftest)
   notify.py          alert sinks (local log + ntfy/Slack/Discord/JSON webhook)
   discover.py        mDNS / SSDP / ONVIF service discovery (names + camera detection)
   agent.py           on-device advisor (auto: local LLM if running, else rules)

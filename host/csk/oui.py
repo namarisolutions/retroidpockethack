@@ -17,8 +17,14 @@ CAMERA_KEYWORDS = (
     "hikvision", "dahua", "axis communications", "wyze", "ezviz", "reolink", "amcrest",
     "foscam", "hanwha", "vivotek", "uniview", "arlo", "immedia", "ring llc", "lorex", "swann",
     "imilab", "yi technology", "mobotix", "avigilon", "verkada", "flock",
+    # additional camera / NVR / doorbell makers (camera-specific orgs only, to
+    # avoid false-flagging vendors that also make routers/thermostats/etc.)
+    "annke", "sunba", "geovision", "pelco", "milesight", "wisenet", "zmodo",
+    "night owl", "tiandy", "raysharp", "xiongmai", "sricam", "vstarcam", "wansview",
+    "eufy", "nooie",
 )
-IOT_KEYWORDS = ("espressif", "tuya", "beken", "realtek", "bouffalo", "winner micro", "hi-flying", "shanghai high-flying")
+IOT_KEYWORDS = ("espressif", "tuya", "beken", "realtek", "bouffalo", "winner micro",
+                "hi-flying", "shanghai high-flying", "sonoff", "itead", "shelly", "quectel")
 
 # Small seed so the app is useful before the full DB is downloaded.
 SEED = {

@@ -663,3 +663,22 @@ def test_dashboard_build_state_and_serve():
     page = urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=3).read()
     assert b"DEMON KING" in page
     d.stop()
+
+
+# ------------------------------------------------------------------ selftest
+def test_selftest_runs_and_pipeline_fires():
+    from csk import selftest
+    r = selftest.run(with_serial=False)   # skip the hardware probe
+    names = {name: ok for ok, name, _ in r.rows}
+    assert names.get("core modules import") is True
+    assert names.get("detector: cameras") is True
+    assert names.get("detector: rogue AP") is True
+    # informational rows don't fail the run
+    assert r.ok is True
+
+
+def test_oui_expanded_cameras():
+    from csk import oui
+    oui._db = None
+    oui.SEED["F0B429"] = "Eufy Security"       # exercise keyword path
+    assert oui.lookup("F0:B4:29:00:00:01")[1] == "camera"

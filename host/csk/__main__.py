@@ -26,6 +26,7 @@ def main(argv=None) -> int:
     ap.add_argument("--window", metavar="WxH", help="windowed mode, e.g. 960x540 (default fullscreen)")
     ap.add_argument("--headless", action="store_true", help="terminal output only")
     ap.add_argument("--monitor", action="store_true", help="24/7 headless defense monitor (RF + LAN scan + alerts)")
+    ap.add_argument("--selftest", action="store_true", help="run bring-up diagnostics (stack + optional ESP32) and exit")
     ap.add_argument("--scan", action="store_true", help="one-shot LAN scan of the network this device is on, then exit")
     ap.add_argument("--scan-ap", metavar="SSID", help="join SSID, scan it for cameras, restore previous network, exit")
     ap.add_argument("--no-rf", action="store_true", help="monitor/scan without the ESP32 (LAN only)")
@@ -35,6 +36,9 @@ def main(argv=None) -> int:
     ap.add_argument("--log-dir", default=os.path.expanduser(os.environ.get("CSK_LOG_DIR", "~/csk-logs")))
     a = ap.parse_args(argv)
 
+    if a.selftest:
+        from . import selftest
+        return selftest.main(a.port)
     if a.scan:
         return oneshot_scan()
     if a.scan_ap:
