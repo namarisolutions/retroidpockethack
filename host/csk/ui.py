@@ -42,16 +42,31 @@ CAT_COL = {"tracker": (255, 130, 95), "camera": (255, 183, 59), "alpr": (255, 18
 GOOD = (72, 214, 138)
 
 
-def _load_font(size: int, bold: bool = False):
-    """A real TTF if we can find one (big readability win over the default)."""
+def _load_font(size: int, bold: bool = False, serif: bool = False):
+    """A real TTF if we can find one (big readability win over the default).
+
+    serif=True picks an old-book serif face for the dungeon aesthetic.
+    """
     import glob
-    pats = [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans%s.ttf" % ("-Bold" if bold else ""),
-        "/usr/share/fonts/**/DejaVuSans%s.ttf" % ("-Bold" if bold else ""),
-        "/usr/share/fonts/**/NotoSans%s.ttf" % ("-Bold" if bold else "-Regular"),
-        "/usr/share/fonts/**/LiberationSans-%s.ttf" % ("Bold" if bold else "Regular"),
-        "/usr/share/fonts/**/Roboto-%s.ttf" % ("Bold" if bold else "Regular"),
-    ]
+    b = "-Bold" if bold else ""
+    bb = "Bold" if bold else "Regular"
+    if serif:
+        pats = [
+            "/usr/share/fonts/**/EBGaramond-%s.ttf" % ("Bold" if bold else "Regular"),
+            "/usr/share/fonts/**/*Garamond*%s.ttf" % ("Bold" if bold else ""),
+            "/usr/share/fonts/truetype/dejavu/DejaVuSerif%s.ttf" % ("-Bold" if bold else ""),
+            "/usr/share/fonts/**/DejaVuSerif%s.ttf" % ("-Bold" if bold else ""),
+            "/usr/share/fonts/**/NotoSerif%s.ttf" % ("-Bold" if bold else "-Regular"),
+            "/usr/share/fonts/**/LiberationSerif-%s.ttf" % bb,
+        ]
+    else:
+        pats = [
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans%s.ttf" % b,
+            "/usr/share/fonts/**/DejaVuSans%s.ttf" % b,
+            "/usr/share/fonts/**/NotoSans%s.ttf" % ("-Bold" if bold else "-Regular"),
+            "/usr/share/fonts/**/LiberationSans-%s.ttf" % bb,
+            "/usr/share/fonts/**/Roboto-%s.ttf" % bb,
+        ]
     for pat in pats:
         hits = sorted(glob.glob(pat, recursive=True))
         if hits:
@@ -77,9 +92,18 @@ THEMES = {
     "ice": dict(BG=(6, 10, 16), PANEL=(12, 18, 28), SURFACE=(16, 24, 36), SURFACE_SEL=(24, 40, 60),
                 BORDER=(32, 46, 66), FG=(210, 234, 255), DIM=(120, 150, 180), FAINT=(40, 54, 74),
                 ACCENT=(120, 200, 255), GOOD=(120, 230, 200)),
+    # Dungeon: warm stone + torchlight + aged-parchment ink. Uses a serif face
+    # and a drawn brick/vignette background.
+    "dungeon": dict(BG=(18, 15, 12), PANEL=(30, 24, 18), SURFACE=(42, 34, 25), SURFACE_SEL=(64, 50, 32),
+                    BORDER=(74, 58, 38), FG=(227, 208, 170), DIM=(150, 130, 100), FAINT=(58, 46, 32),
+                    ACCENT=(240, 170, 60), GOOD=(150, 200, 110), SERIF=True, TEXTURE="dungeon"),
 }
-THEME_ORDER = ["hellfire", "phosphor", "amber", "ice"]
+THEME_ORDER = ["dungeon", "hellfire", "phosphor", "amber", "ice"]
 _BASE_THEME = {}   # filled on first apply
+
+
+SERIF = False
+TEXTURE = ""
 
 
 def apply_theme(name: str) -> None:
@@ -89,8 +113,11 @@ def apply_theme(name: str) -> None:
     if not _BASE_THEME:
         _BASE_THEME.update({k: g[k] for k in keys})
     g.update(_BASE_THEME)                         # reset to default first
-    g.update(THEMES.get(name, {}))
+    th = THEMES.get(name, {})
+    g.update({k: v for k, v in th.items() if k in keys})
     g["SEL_BG"] = g["SURFACE_SEL"]
+    g["SERIF"] = th.get("SERIF", False)
+    g["TEXTURE"] = th.get("TEXTURE", "")
 
 
 class MapRow:
@@ -231,17 +258,14 @@ class App:
             pygame.mouse.set_visible(False)
         self.W, self.H = self.screen.get_size()
         self.u = max(12, self.H // 24)          # base text size
-        self.f_s = _load_font(int(self.u * 0.72))
-        self.f_m = _load_font(int(self.u * 0.92))
-        self.f_mb = _load_font(int(self.u * 0.92), bold=True)
-        self.f_l = _load_font(int(self.u * 1.3), bold=True)
-        self.f_xl = _load_font(int(self.u * 5), bold=True)
         self.inp = C.Input(self.cfg.get("layout", "nintendo"), self.cfg.get("raw_buttons"))
         self.snd = Sound()
         self.snd.muted = self.cfg.get("muted", False)
         self.rumble_on = self.cfg.get("rumble", True)
-        self.theme = self.cfg.get("theme", "hellfire")
+        self.theme = self.cfg.get("theme", "dungeon")
         apply_theme(self.theme)
+        self._bg_tex = None
+        self._build_fonts()
         self.tab = 0
         self.sel = {t: 0 for t in TABS}
         self.view = "list"          # list | detail | hunt | menu | buttontest
@@ -255,7 +279,6 @@ class App:
         self._scan: dict = {"running": False, "steps": [], "result": None, "sel": 0}
         self._boot_until = time.monotonic() + 3.0
         self.view = "boot"
-        self.f_title = _load_font(int(self.u * 1.7), bold=True)
         # Persistent cross-day memory
         self.locations = self.cfg.get("locations", ["home", "work", "out"])
         self.loc_idx = 0
@@ -315,6 +338,54 @@ class App:
         if "following" in t or "seen repeatedly" in t:
             return "follow"
         return "rogue"
+
+    def _build_fonts(self) -> None:
+        u, sf = self.u, SERIF
+        self.f_s = _load_font(int(u * 0.74), serif=sf)
+        self.f_m = _load_font(int(u * 0.95), serif=sf)
+        self.f_mb = _load_font(int(u * 0.95), bold=True, serif=sf)
+        self.f_l = _load_font(int(u * 1.35), bold=True, serif=sf)
+        self.f_title = _load_font(int(u * 1.8), bold=True, serif=sf)
+        self.f_xl = _load_font(int(u * 5), bold=True, serif=sf)
+
+    def _build_bg(self) -> None:
+        """Pre-render the dungeon stone-brick + torch-vignette background once."""
+        import random
+        self._bg_tex = None
+        if TEXTURE != "dungeon":
+            return
+        u = self.u
+        surf = pygame.Surface((self.W, self.H))
+        surf.fill(BG)
+        rng = random.Random(1337)
+        bh = int(u * 1.3)
+        bw = int(u * 2.6)
+        mortar = max(2, u // 10)
+        stone = PANEL
+        for ri, y in enumerate(range(-bh, self.H + bh, bh)):
+            off = (bw // 2) if ri % 2 else 0
+            for x in range(-bw + off, self.W + bw, bw):
+                shade = rng.randint(-8, 10)
+                c = tuple(max(0, min(255, stone[i] + shade)) for i in range(3))
+                pygame.draw.rect(surf, c, (x + mortar, y + mortar, bw - mortar, bh - mortar), border_radius=3)
+        # torch vignette: darken toward the edges
+        vig = pygame.Surface((self.W, self.H), pygame.SRCALPHA)
+        cx, cy = self.W // 2, int(self.H * 0.42)
+        maxd = (cx ** 2 + cy ** 2) ** 0.5
+        step = max(8, self.H // 48)
+        for i in range(0, int(maxd), step):
+            a = int(160 * (i / maxd) ** 2)
+            pygame.draw.circle(vig, (0, 0, 0, min(210, a)), (cx, cy), int(maxd) - i, step + 1)
+        surf.blit(vig, (0, 0))
+        self._bg_tex = surf
+
+    def paint_bg(self) -> None:
+        if TEXTURE == "dungeon":
+            if self._bg_tex is None:
+                self._build_bg()
+            self.screen.blit(self._bg_tex, (0, 0))
+        else:
+            self.screen.fill(BG)
 
     # ---------------------------------------------------------------- helpers
     def text(self, s, font, col, x, y, right=False, center=False, maxw=None):
@@ -475,6 +546,8 @@ class App:
         i = (THEME_ORDER.index(self.theme) + 1) % len(THEME_ORDER) if self.theme in THEME_ORDER else 0
         self.theme = THEME_ORDER[i]
         apply_theme(self.theme)
+        self._build_fonts()
+        self._build_bg()
         self.notify(f"Theme: {self.theme}")
 
     def cycle_location(self) -> None:
@@ -1162,7 +1235,7 @@ class App:
 
     def draw_buttontest(self) -> None:
         u = self.u
-        self.screen.fill(BG)
+        self.paint_bg()
         self.text("BUTTON TEST", self.f_l, ACCENT, u, u)
         self.text("Press buttons; the last events are listed below. START returns to the menu.", self.f_s, DIM, u, u * 3)
         self.text(f"Face layout: {self.inp.layout}   Pads: {', '.join(self.inp.names()) or 'none (keyboard only)'}",
@@ -1416,7 +1489,7 @@ class App:
             self.text(f"{h.get('mac', '')}   ports: {ports}", self.f_s, DIM, u, ry + int(u * 1.0), maxw=self.W - u * 10)
 
     def draw_boot(self) -> None:
-        self.screen.fill(BG)
+        self.paint_bg()
         frame = int(time.monotonic() * 3)
         sc = max(5, self.H // 44)
         sw, sh = art.skull_size(sc)
@@ -1434,7 +1507,7 @@ class App:
         pygame.display.flip()
 
     def render(self) -> None:
-        self.screen.fill(BG)
+        self.paint_bg()
         if self.view == "boot":
             self.draw_boot()
             return

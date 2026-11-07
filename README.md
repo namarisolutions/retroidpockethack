@@ -245,8 +245,9 @@ event buffer is too small for a full message pack today).
 - **SOULS / bestiary:** the King names every device it detects - a deterministic
   monster name from the MAC (e.g. an AirTag becomes the "Writhing Revenant",
   ranked EYE-TYRANT / PARASITE / SKY-DEMON by category). Pure flavour.
-- **Themes** (Menu > Theme): Hellfire (default), green Phosphor CRT, Amber CRT,
-  and Ice. Threat colours stay meaningful in every theme.
+- **Themes** (Menu > Theme): **Dungeon** (default - serif typeface, torch-lit
+  stone-brick walls, parchment tablets), Hellfire, green Phosphor CRT, Amber
+  CRT, and Ice. Threat colours stay meaningful in every theme.
 
 ## The Demon King speaks
 ## The Demon King speaks
