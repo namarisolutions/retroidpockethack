@@ -36,6 +36,8 @@ network (see below).
 | **Fake public hotspots** (fake `xfinitywifi`, `XFINITY`, `attwifi`, `CableWiFi`, …) | real carrier gateways broadcast several sibling networks from near-identical MACs with one beacon layout. A fake is usually alone, often on a made-up MAC, has a beacon fingerprint that differs from the real ones nearby, or uses the wrong security (e.g. an *open* `XFINITY`) |
 | **Evil twin** | same SSID broadcast both open and encrypted |
 | **Deauth attacks** (jammers, handshake capture, knocking cameras offline) | deauth/disassoc frame rate |
+| **BLE spam attacks** (Flipper Zero / "AppleJuice" pairing-popup floods) | many random MACs spamming Apple/FastPair/SwiftPair/Samsung pairing prompts in a short window |
+| **Drone (Remote ID)** | ASTM/FAA drone broadcast - reveals drone + operator location (see below) |
 
 **What it can't do:** detect 5 GHz-only devices (the ESP32 is 2.4 GHz only),
 wired or recording-only cameras (SD card, no radio), cell-site simulators
@@ -275,6 +277,15 @@ locations on 2+ days. Randomized-MAC devices are never logged (they can't be
 tracked reliably and would just create noise); mark anything of your own as
 *mine* (Y) to drop it from history for good.
 
+## Operational security: panic wipe
+
+**Menu > PANIC WIPE** (hold A for 2 s) securely erases everything the kit has
+recorded about where you've been - session logs, reports, the baseline /
+following database, and your allow & watch lists - for when the device might be
+taken. Your settings survive. The logs are a liability precisely because they
+map your movements, so this is one button away.
+
+## 24/7 network defense monitor
 ## 24/7 network defense monitor
 
 Leave the Flip on your home network and have it watch continuously, with no
@@ -285,6 +296,7 @@ and alerts only when something *new* or camera-shaped appears.
 ./run.sh --scan                 # one-shot: list everything on your current network, flag cameras/DVRs
 ./run.sh --monitor              # 24/7 watch (ESP32 RF + LAN scan + alerts)
 ./run.sh --monitor --no-rf      # LAN only, no ESP32 plugged in
+./run.sh --monitor --web 8099   # also serve a read-only web dashboard
 ```
 
 - **Learning window** (first 10 min by default): everything already on the
@@ -326,6 +338,7 @@ host/csk/            Python app
   store.py           persistent device + sighting history (SQLite): cross-day following
   wifi.py / apscan.py  join a chosen AP and scan what's behind it (nmcli), then restore
   monitor.py         headless RF+LAN defense loop
+  dashboard.py       read-only web dashboard for the monitor (view from your phone)
   notify.py          alert sinks (local log + ntfy/Slack/Discord/JSON webhook)
   discover.py        mDNS / SSDP / ONVIF service discovery (names + camera detection)
   agent.py           on-device advisor (auto: local LLM if running, else rules)

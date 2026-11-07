@@ -89,6 +89,29 @@ def _apple(d: bytes) -> Classification:
 
 
 UUID_ODID = 0xFFFA            # ASTM - Open Drone ID / FAA Remote ID
+UUID_FASTPAIR = 0xFE2C        # Google Fast Pair
+
+
+def pairing_kind(adv: Adv) -> str:
+    """If this advert is a device-pairing/notification popup (the kind BLE-spam
+    tools flood to pop endless dialogs), return its source, else ''.
+
+    Single hits are normal (real AirPods, a Fast Pair earbud); the *flood* is
+    the attack, so world.py counts distinct spammers over a short window.
+    """
+    # Apple proximity-pairing (AirPods/Beats popup) and nearby-action prompts
+    ad = adv.mfr.get(CO_APPLE, b"")
+    if ad[:1] in (b"\x07", b"\x09", b"\x0f"):     # proximity pair / airplay / nearby action
+        return "Apple"
+    if UUID_FASTPAIR in adv.service_data:          # Google Fast Pair model-id frame
+        return "FastPair"
+    ms = adv.mfr.get(CO_MICROSOFT, b"")
+    if ms[:3] == b"\x03\x00\x80" or ms[:1] == b"\x03":  # Microsoft SwiftPair beacon
+        return "SwiftPair"
+    sm = adv.mfr.get(CO_SAMSUNG, b"")
+    if sm[:2] in (b"\x01\x00", b"\x42\x09", b"\x01\x02"):  # Samsung buds/watch pairing
+        return "Samsung"
+    return ""
 
 
 def classify(adv: Adv) -> Classification:

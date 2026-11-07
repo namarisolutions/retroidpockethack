@@ -57,6 +57,8 @@ KARMA_SSIDS = 5                 # one BSSID beaconing this many SSIDs -> rogue A
 STREAM_BPS = 40_000             # sustained uplink bytes/sec that looks like video
 STREAM_WINDOW = 20.0
 ACTIVE_SECS = 30.0              # alert counts as "active" if refreshed within this
+BLE_SPAM_WINDOW = 5.0           # pairing-popup flood: distinct spammers in this window
+BLE_SPAM_THRESHOLD = 12
 
 SSID_CAMERA_HINTS = ("ipcam", "ipc-", "ipc_", "hdwificam", "wificam", "v380", "minicam", "mini-cam",
                      "spycam", "lookcam", "cam_", "cam-", "ezviz", "hikvision", "dahua", "wyze", "yi-cam",
@@ -147,6 +149,7 @@ class World:
         self.checkpoint_idx = 0
         self.checkpoint_times: list[float] = [clock()]
         self.deauth_events: deque = deque()   # (t, n, src, dst, rssi, ch)
+        self.ble_spam: deque = deque()        # (t, mac, kind) pairing-popup ads
         self.sensor: dict = {}
         self.sensor_hello: dict = {}
         self.last_msg = 0.0
@@ -272,6 +275,9 @@ class World:
                 d.raw = msg.get("p", "")
                 adv = bleparse.parse_adv(payload)
                 c = bleparse.classify(adv)
+                pk = bleparse.pairing_kind(adv)
+                if pk:
+                    self.ble_spam.append((now, addr, pk))
                 if msg.get("at", 1) == 0 and not d.vendor:
                     d.vendor, ocat = oui.lookup(addr)
                     if ocat == "camera" and not c.category:
@@ -469,6 +475,20 @@ class World:
             chs = sorted({e[5] for e in self.deauth_events})
             self._raise(found, "deauth", HIGH, "Deauth attack in progress",
                         f"{total} deauth/disassoc frames in {int(DEAUTH_WINDOW)}s, {len(srcs)} sources, ch {chs}")
+
+        # BLE spam: a flood of pairing-popup adverts from many random MACs
+        # (Flipper Zero / "AppleJuice"-style attacks that spam pairing dialogs).
+        while self.ble_spam and now - self.ble_spam[0][0] > BLE_SPAM_WINDOW:
+            self.ble_spam.popleft()
+        spam_macs = {m for _, m, _ in self.ble_spam}
+        if len(spam_macs) >= BLE_SPAM_THRESHOLD:
+            kinds = {}
+            for _, _, k in self.ble_spam:
+                kinds[k] = kinds.get(k, 0) + 1
+            top = max(kinds, key=kinds.get)
+            self._raise(found, "blespam", HIGH, "BLE spam attack (pairing-popup flood)",
+                        f"{len(spam_macs)} fake devices in {int(BLE_SPAM_WINDOW)}s spamming {top} "
+                        f"pairing prompts - a nearby device is attacking phones")
 
         # Persistent cross-day / cross-location recurrence (survives restarts)
         self.recurring_alerts(found, now)
@@ -741,6 +761,46 @@ class World:
               "Verify: recompute HMAC-SHA256 over the canonical 'report' object",
               "with the per-install key in ~/.config/csk/report_key."]
         return "\n".join(L) + "\n"
+
+    def panic_wipe(self, log_dir: str | None = None) -> dict:
+        """Securely erase everything the kit has recorded about where you've been:
+        session logs, reports, the persistent baseline/sightings DB, and the
+        allow/watch lists. For when the device might be taken. Settings are kept.
+        Returns counts of what was removed.
+        """
+        import glob
+        import shutil
+
+        removed = {"files": 0, "devices": 0}
+        # in-memory state
+        removed["devices"] = len(self.devices)
+        self.devices.clear()
+        self.alerts.clear()
+        self.ble_spam.clear()
+        self.deauth_events.clear()
+        self.allow.clear()
+        self.watch.clear()
+        if self.store is not None:
+            try:
+                self.store.close()
+            except Exception:
+                pass
+            self.store = None
+        # on-disk state
+        targets = [ALLOW_FILE, WATCH_FILE, os.path.join(CONFIG_DIR, "baseline.db"),
+                   os.path.join(CONFIG_DIR, "report_key")]
+        logd = os.path.expanduser(log_dir or "~/csk-logs")
+        targets += glob.glob(os.path.join(logd, "*"))
+        for t in targets:
+            try:
+                if os.path.isdir(t):
+                    shutil.rmtree(t)
+                elif os.path.exists(t):
+                    os.remove(t)
+                removed["files"] += 1
+            except OSError:
+                pass
+        return removed
 
     def sensor_ok(self) -> bool:
         return self.clock() - self.last_msg < 5.0

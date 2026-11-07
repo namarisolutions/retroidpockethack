@@ -29,6 +29,8 @@ def main(argv=None) -> int:
     ap.add_argument("--scan", action="store_true", help="one-shot LAN scan of the network this device is on, then exit")
     ap.add_argument("--scan-ap", metavar="SSID", help="join SSID, scan it for cameras, restore previous network, exit")
     ap.add_argument("--no-rf", action="store_true", help="monitor/scan without the ESP32 (LAN only)")
+    ap.add_argument("--web", type=int, metavar="PORT", default=None,
+                    help="with --monitor: serve the read-only dashboard on this port (e.g. 8099)")
     ap.add_argument("--no-log", action="store_true", help="don't record a session log")
     ap.add_argument("--log-dir", default=os.path.expanduser(os.environ.get("CSK_LOG_DIR", "~/csk-logs")))
     a = ap.parse_args(argv)
@@ -60,7 +62,7 @@ def main(argv=None) -> int:
     world = World(clock=src.clock if src else None) if src else World()
 
     if a.monitor:
-        return monitor_mode(src, world, a.log_dir)
+        return monitor_mode(src, world, a.log_dir, a.web)
     if a.headless:
         return headless(src, world)
 
@@ -123,7 +125,7 @@ def oneshot_scan_ap(ssid: str) -> int:
     return 0
 
 
-def monitor_mode(src, world: World, log_dir: str) -> int:
+def monitor_mode(src, world: World, log_dir: str, web_port=None) -> int:
     import os
 
     from . import monitor
@@ -132,6 +134,8 @@ def monitor_mode(src, world: World, log_dir: str) -> int:
 
     cfg = _load_cfg()
     cfg.setdefault("log_dir", log_dir)
+    if web_port:
+        cfg.setdefault("monitor", {})["web_port"] = web_port
     os.makedirs(log_dir, exist_ok=True)
     store = Store()
     notifier = Notifier.from_config(cfg, os.path.join(log_dir, "monitor.log"))

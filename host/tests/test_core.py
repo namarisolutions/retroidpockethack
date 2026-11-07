@@ -596,3 +596,70 @@ def test_world_drone_wifi_odid_message():
     w.evaluate()
     d = w.devices["ble:odid:aa:bb:cc:dd:ee:ff"]
     assert d.category == "drone" and d.drone["serial"] == "WIFI-DRONE" and d.drone["via"] == "WiFi"
+
+
+# ------------------------------------------------------------------ ble spam, wipe, dashboard
+def _apple_pair_adv(seed):
+    # Apple proximity-pairing style manufacturer advert (type 0x07)
+    import struct as _s
+    body = bytes([0x07, 0x19]) + bytes([(seed * 37) & 0xFF]) * 22
+    return (b"\x02\x01\x06" + bytes([len(body) + 3, 0xFF]) + _s.pack("<H", 0x004C) + body)
+
+
+def test_ble_spam_flood_detected():
+    from csk.bleparse import HIGH as H
+    clk = Clock()
+    w = World(clock=clk)
+    for i in range(15):                      # 15 distinct random MACs in <5s
+        mac = f"d{i:x}:11:22:33:44:{i:02x}"
+        w.ingest({"t": "ble", "a": mac, "at": 1, "r": -50, "p": _apple_pair_adv(i).hex()})
+    w.evaluate()
+    a = w.alerts["blespam"]
+    assert a.level == H and "pairing" in a.detail.lower() and "Apple" in a.detail
+
+
+def test_ble_spam_not_triggered_by_a_few():
+    clk = Clock()
+    w = World(clock=clk)
+    for i in range(3):
+        w.ingest({"t": "ble", "a": f"d{i:x}:11:22:33:44:{i:02x}", "at": 1, "r": -50, "p": _apple_pair_adv(i).hex()})
+    w.evaluate()
+    assert "blespam" not in w.alerts
+
+
+def test_panic_wipe(tmp_path, monkeypatch):
+    import csk.world as W
+    cfgdir = tmp_path / "cfg"
+    cfgdir.mkdir()
+    monkeypatch.setattr(W, "CONFIG_DIR", str(cfgdir))
+    monkeypatch.setattr(W, "ALLOW_FILE", str(cfgdir / "allow.json"))
+    monkeypatch.setattr(W, "WATCH_FILE", str(cfgdir / "watch.json"))
+    logd = tmp_path / "logs"
+    logd.mkdir()
+    (logd / "session-1.jsonl").write_text("{}")
+    (cfgdir / "baseline.db").write_text("x")
+    w = World(clock=Clock())
+    w.ingest({"t": "ble", "a": "aa:bb:cc:dd:ee:01", "at": 1, "r": -50, "p": "020106"})
+    removed = w.panic_wipe(str(logd))
+    assert removed["devices"] == 1 and removed["files"] >= 2
+    assert not (logd / "session-1.jsonl").exists()
+    assert not (cfgdir / "baseline.db").exists()
+    assert w.devices == {} and w.allow == {}
+
+
+def test_dashboard_build_state_and_serve():
+    import urllib.request
+    from csk import dashboard
+    w = World(clock=Clock())
+    w.ingest({"t": "ble", "a": "c4:00:00:00:00:01", "at": 1, "r": -60, "p": "020106"})
+    w.evaluate()
+    state = dashboard.build_state(w)
+    assert state["counts"]["devices"] == 1 and "alerts" in state and "location" in state
+    # serve on an ephemeral port and fetch the API
+    d = dashboard.Dashboard(lambda: dashboard.build_state(w), host="127.0.0.1", port=0).start()
+    port = d.httpd.server_address[1]
+    body = urllib.request.urlopen(f"http://127.0.0.1:{port}/api/state", timeout=3).read()
+    assert json.loads(body)["counts"]["devices"] == 1
+    page = urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=3).read()
+    assert b"DEMON KING" in page
+    d.stop()

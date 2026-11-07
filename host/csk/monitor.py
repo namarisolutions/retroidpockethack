@@ -94,9 +94,17 @@ def run(src, world, store: Store, notifier, cfg: dict, interval_rf=1.0):
         world.store = store
         world.set_location(mon_cfg.get("location", "monitor"))
 
+    dash = None
+    web_port = int(mon_cfg.get("web_port", 0))
+    if web_port and world is not None:
+        from .dashboard import Dashboard
+        dash = Dashboard(lambda: __import__("csk.dashboard", fromlist=["build_state"]).build_state(
+            world, store, netmon.last_scan), host=mon_cfg.get("web_host", "0.0.0.0"), port=web_port).start()
+
     notifier.send(INFO, "CSK monitor started",
                   f"RF sensor {'on' if src else 'off'}, LAN scan every {int(scan_interval)}s, "
-                  f"learning for {int((netmon.learn_until - store.clock()) / 60)} more min")
+                  f"learning for {int((netmon.learn_until - store.clock()) / 60)} more min"
+                  + (f", dashboard on :{web_port}" if dash else ""))
 
     next_scan = 0.0
     next_report = time.time() + report_every

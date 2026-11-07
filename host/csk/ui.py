@@ -241,6 +241,7 @@ class App:
         self._oracle_thinking = False
         self._oracle_ready = False
         self._oracle_via = ""
+        self._wipe_hold = 0.0
         self.speak("boot")
         self.w.new_alert_cb = None
 
@@ -253,6 +254,7 @@ class App:
         "deauth": ["AN ATTACK UPON THE AIR!", "SOMEONE SEVERS THE SIGNAL."],
         "follow": ["A SHADOW MOVES AS YOU MOVE.", "YOU ARE FOLLOWED. I AM CERTAIN."],
         "drone": ["A MACHINE WATCHES FROM ABOVE.", "WINGS IN THE SKY. I SEE ITS MASTER.", "EYES IN THE AIR. I HAVE ITS PILOT."],
+        "blespam": ["A SWARM OF PHANTOMS! AN ATTACK.", "LIES FLOOD THE AETHER. IGNORE THEM."],
         "clear": ["THE AIR IS CLEAN... FOR NOW.", "ALL IS QUIET. I REMAIN VIGILANT."],
     }
 
@@ -264,7 +266,8 @@ class App:
         mood = {"boot": "rage", "clear": "calm"}.get(event, "rage" if event in ("rogue", "deauth") else "alert")
         self.voiceline = (random.choice(lines), mood, time.monotonic() + secs)
         self.snd.play({"boot": "boot", "rogue": "rogue", "camera": "camera", "tracker": "tracker",
-                       "deauth": "rage", "follow": "found", "drone": "camera", "clear": "clear"}.get(event, "blip"))
+                       "deauth": "rage", "follow": "found", "drone": "camera", "blespam": "rage",
+                       "clear": "clear"}.get(event, "blip"))
 
     def _event_for_alert(self, a) -> str:
         t = a.title.lower()
@@ -276,6 +279,8 @@ class App:
             return "camera"
         if "tracker" in t or "find my" in t or "tile" in t or "tag" in t:
             return "tracker"
+        if "spam" in t:
+            return "blespam"
         if "drone" in t:
             return "drone"
         if "following" in t or "seen repeatedly" in t:
@@ -378,7 +383,7 @@ class App:
     # ---------------------------------------------------------------- actions
     MENU = ["Resume", "Consult the Demon King", "Location", "Face buttons", "Sound", "Rumble",
             "BLE scanning", "WiFi scanning", "Mark everything visible as mine", "Export signed report",
-            "Clear alerts", "Button test", "Quit"]
+            "Clear alerts", "Button test", "PANIC WIPE (erase all data)", "Quit"]
 
     def menu_value(self, i: int) -> str:
         s = self.w.sensor
@@ -424,6 +429,9 @@ class App:
             self.view = "buttontest"
             self._bt_started = time.monotonic()
         elif i == 12:
+            self.view = "wipeconfirm"
+            self._wipe_hold = 0.0
+        elif i == 13:
             self.running = False
         self.save()
 
@@ -472,6 +480,11 @@ class App:
                 self.consult_oracle()
             elif act in (C.B, C.START):
                 self.view = "list"
+            return
+        if v == "wipeconfirm":
+            if act in (C.B, C.START):
+                self.view = "menu"
+            # the actual wipe is gated on a held A (see step())
             return
         if v == "buttontest":
             if act == C.START or (time.monotonic() - self._bt_started > 2 and act == "HOME"):
@@ -1102,6 +1115,30 @@ class App:
         flash = (col if int(t * 6) % 2 else FG) if done else col
         self.text(shown, self.f_mb, flash, x + sw + pad * 2, y + (bh - self.f_mb.get_height()) // 2)
 
+    def draw_wipeconfirm(self, top: int, bottom: int) -> None:
+        u = self.u
+        cx = self.W // 2
+        y = top + u * 2
+        self.text("PANIC WIPE", self.f_title, LEVEL_COL[HIGH], cx, y, center=True)
+        y += int(u * 2.6)
+        for ln in ["This erases ALL recorded data: session logs, reports,",
+                   "the device baseline / following history, and your",
+                   "allow & watch lists. Your settings are kept.",
+                   "", "This cannot be undone."]:
+            self.text(ln, self.f_m, FG if not ln.startswith("This cannot") else LEVEL_COL[WARN],
+                      cx, y, center=True)
+            y += int(u * 1.3)
+        y += u
+        # hold-to-confirm bar
+        frac = min(1.0, self._wipe_hold / 2.0)
+        bw = int(self.W * 0.5)
+        bx = cx - bw // 2
+        pygame.draw.rect(self.screen, FAINT, (bx, y, bw, u), border_radius=u // 2)
+        pygame.draw.rect(self.screen, LEVEL_COL[HIGH], (bx, y, int(bw * frac), u), border_radius=u // 2)
+        y += int(u * 1.8)
+        self.text("HOLD  A  TO WIPE" if frac < 1 else "WIPING...", self.f_l, LEVEL_COL[HIGH], cx, y, center=True)
+        self.text("B to cancel", self.f_s, DIM, cx, bottom - u, center=True)
+
     def draw_oracle(self, top: int, bottom: int) -> None:
         u = self.u
         o = self._oracle or {}
@@ -1181,6 +1218,8 @@ class App:
         v = self.view
         if v == "oracle":
             return [("A", "ask again"), ("B", "back")]
+        if v == "wipeconfirm":
+            return [("A", "hold to wipe"), ("B", "cancel")]
         if v == "hunt":
             return [("B", "back"), ("Y", "mine"), ("X", "checkpoint"), ("SELECT", "mute")]
         if v == "detail":
@@ -1311,6 +1350,8 @@ class App:
             self.draw_scanview(y, bottom)
         elif self.view == "oracle":
             self.draw_oracle(y, bottom)
+        elif self.view == "wipeconfirm":
+            self.draw_wipeconfirm(y, bottom)
         if self.view == "menu":
             self.draw_menu()
         else:
@@ -1344,7 +1385,29 @@ class App:
                 self.running = False
         for act in self.inp.process(events):
             self.handle(act)
+        # Panic wipe: must HOLD A (east face) for 2s on the confirm screen.
+        if self.view == "wipeconfirm":
+            holding_a = any(self.inp.face(p) == C.A for p in self.inp.held)
+            if holding_a:
+                self._wipe_hold += 1 / 30.0
+                if self._wipe_hold >= 2.0:
+                    self._do_panic_wipe()
+            else:
+                self._wipe_hold = 0.0
         self.render()
+
+    def _do_panic_wipe(self) -> None:
+        removed = self.w.panic_wipe(os.path.expanduser(self.cfg.get("log_dir", "~/csk-logs")))
+        try:
+            from .store import Store
+            self.w.store = Store()
+            self.w.set_location(self.locations[self.loc_idx])
+        except Exception:
+            self.w.store = None
+        self._wipe_hold = 0.0
+        self.view = "list"
+        self.notify(f"WIPED: {removed['files']} files, {removed['devices']} devices erased", HIGH, 5)
+        self.snd.play("rage")
 
     def run(self) -> None:
         # Steam's "Exit game" sends SIGTERM: leave the main loop cleanly so the
