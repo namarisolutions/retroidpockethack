@@ -702,3 +702,45 @@ def test_theme_apply_changes_palette():
     assert U.BG != base_bg and U.FG[1] > U.FG[0]      # greenish
     U.apply_theme("hellfire")
     assert U.BG == base_bg                            # resets cleanly
+
+
+# ------------------------------------------------------------------ spectrum, tripwire, rank
+def test_channel_activity_and_cleanest():
+    clk = Clock()
+    w = World(clock=clk)
+    for i in range(6):
+        w.ingest({"t": "ap", "b": f"aa:bb:cc:00:00:{i:02x}", "s": b"N".hex(), "ch": 6, "e": 2, "r": -55, "n": 3})
+    w.ingest({"t": "ap", "b": "aa:bb:cc:00:01:00", "s": b"N".hex(), "ch": 1, "e": 2, "r": -70, "n": 3})
+    act = w.channel_activity()
+    assert act[6]["aps"] == 6 and act[6]["score"] > act[11]["score"]
+    assert w.cleanest_channel() == 11          # 1 has one AP, 6 is busy, 11 empty
+
+
+def test_tripwire_fires_even_for_allowlisted():
+    clk = Clock()
+    w = World(clock=clk)
+    w.ingest({"t": "ble", "a": "c4:00:00:00:00:01", "at": 0, "r": -80, "p": "020106"})
+    w.toggle_allow("ble:c4:00:00:00:00:01")     # it's "mine"
+    assert w.toggle_tripwire("ble:c4:00:00:00:00:01", threshold=-60) is True
+    w.evaluate()
+    assert "trip:ble:c4:00:00:00:00:01" not in w.alerts   # far away (-80), no alarm
+    w.ingest({"t": "ble", "a": "c4:00:00:00:00:01", "at": 0, "r": -40, "p": "020106"})   # now close
+    w.evaluate()
+    a = w.alerts["trip:ble:c4:00:00:00:00:01"]
+    assert a.level == HIGH and "close" in a.detail
+
+
+def test_king_rank_ladder():
+    from csk import bestiary
+    assert bestiary.king_rank(0)[0] == "Restless Spirit"
+    title, into, togo = bestiary.king_rank(20)
+    assert title == "Hex-Knight" and into == 5 and togo == 20
+    assert bestiary.king_rank(99999)[2] == 0        # maxed, nothing to next
+
+
+def test_dungeon_theme_is_serif():
+    import csk.ui as U
+    U.apply_theme("dungeon")
+    assert U.SERIF and U.TEXTURE == "dungeon"
+    U.apply_theme("hellfire")
+    assert not U.SERIF

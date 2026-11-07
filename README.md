@@ -245,6 +245,15 @@ event buffer is too small for a full message pack today).
 - **SOULS / bestiary:** the King names every device it detects - a deterministic
   monster name from the MAC (e.g. an AirTag becomes the "Writhing Revenant",
   ranked EYE-TYRANT / PARASITE / SKY-DEMON by category). Pure flavour.
+- **Channel spectrum** (Menu > Channel spectrum): a live 2.4 GHz analyzer -
+  bar per channel showing AP/traffic activity, 1/6/11 marked, the sensor's
+  current scan channel flagged, and a "cleanest channel" suggestion.
+- **Tripwire** (L2 on any device): arm a proximity alarm - a HIGH alert fires
+  when that device comes within signal range. Works on your own gear too (to
+  find lost keys/tags) or on a tail you want to know has returned.
+- **Dungeon music** (Menu): a slow procedural chiptune dungeon ambience loop.
+- **King's rank:** the Souls tab shows your rank (Restless Spirit -> ... ->
+  THE UNKILLABLE KING) and a bar to the next, earned by claiming device souls.
 - **Themes** (Menu > Theme): **Dungeon** (default - serif typeface, torch-lit
   stone-brick walls, parchment tablets), Hellfire, green Phosphor CRT, Amber
   CRT, and Ice. Threat colours stay meaningful in every theme.

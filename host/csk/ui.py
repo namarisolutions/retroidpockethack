@@ -244,6 +244,33 @@ class Sound:
         except Exception:
             pass
 
+    def _ambient_track(self):
+        """A slow, brooding dungeon loop: a low drone bass + a sparse minor arpeggio."""
+        if "ambient" in self.cache:
+            return self.cache["ambient"]
+        q = 0.42
+        # A minor-ish wander, low and ominous
+        notes = [("A2", q), ("-", q), ("C3", q), ("E3", q), ("A2", q), ("-", q), ("G2", q), ("B2", q),
+                 ("A2", q), ("E3", q), ("F3", q), ("-", q), ("D3", q), ("-", q), ("E3", q), ("A2", q)]
+        s = self._seq(notes, vol=0.22, wave="tri", bass=True)
+        self.cache["ambient"] = s
+        return s
+
+    def ambient(self, on: bool) -> None:
+        if not self.ok:
+            return
+        try:
+            if on and not self.muted:
+                trk = self._ambient_track()
+                if trk:
+                    trk.play(loops=-1, fade_ms=600)
+            else:
+                trk = self.cache.get("ambient")
+                if trk:
+                    trk.fadeout(400)
+        except Exception:
+            pass
+
 
 class App:
     def __init__(self, source, world: World, window: tuple[int, int] | None = None):
@@ -262,6 +289,7 @@ class App:
         self.snd = Sound()
         self.snd.muted = self.cfg.get("muted", False)
         self.rumble_on = self.cfg.get("rumble", True)
+        self.music = self.cfg.get("music", False)
         self.theme = self.cfg.get("theme", "dungeon")
         apply_theme(self.theme)
         self._bg_tex = None
@@ -295,6 +323,8 @@ class App:
         self._oracle_via = ""
         self._wipe_hold = 0.0
         self.speak("boot")
+        if self.music:
+            self.snd.ambient(True)
         self.w.new_alert_cb = None
 
     # ----------------------------------------------------------- voicelines
@@ -307,6 +337,7 @@ class App:
         "follow": ["A SHADOW MOVES AS YOU MOVE.", "YOU ARE FOLLOWED. I AM CERTAIN."],
         "drone": ["A MACHINE WATCHES FROM ABOVE.", "WINGS IN THE SKY. I SEE ITS MASTER.", "EYES IN THE AIR. I HAVE ITS PILOT."],
         "blespam": ["A SWARM OF PHANTOMS! AN ATTACK.", "LIES FLOOD THE AETHER. IGNORE THEM."],
+        "tripwire": ["THE SNARE IS SPRUNG!", "IT RETURNS. I FELT IT CROSS MY THRESHOLD."],
         "clear": ["THE AIR IS CLEAN... FOR NOW.", "ALL IS QUIET. I REMAIN VIGILANT."],
     }
 
@@ -319,7 +350,7 @@ class App:
         self.voiceline = (random.choice(lines), mood, time.monotonic() + secs)
         self.snd.play({"boot": "boot", "rogue": "rogue", "camera": "camera", "tracker": "tracker",
                        "deauth": "rage", "follow": "found", "drone": "camera", "blespam": "rage",
-                       "clear": "clear"}.get(event, "blip"))
+                       "tripwire": "found", "clear": "clear"}.get(event, "blip"))
 
     def _event_for_alert(self, a) -> str:
         t = a.title.lower()
@@ -331,6 +362,8 @@ class App:
             return "camera"
         if "tracker" in t or "find my" in t or "tile" in t or "tag" in t:
             return "tracker"
+        if "tripwire" in t:
+            return "tripwire"
         if "spam" in t:
             return "blespam"
         if "drone" in t:
@@ -408,7 +441,7 @@ class App:
 
     def save(self) -> None:
         self.cfg.update(layout=self.inp.layout, muted=self.snd.muted, rumble=self.rumble_on,
-                        locations=self.locations, theme=self.theme)
+                        locations=self.locations, theme=self.theme, music=self.music)
         save_config(self.cfg)
 
     def rssi_bar(self, x, y, w, h, rssi, col=ACCENT):
@@ -485,62 +518,66 @@ class App:
         return getattr(x, "dev_id", None) or getattr(x, "id", None)
 
     # ---------------------------------------------------------------- actions
-    MENU = ["Resume", "Consult the Demon King", "Location", "Face buttons", "Sound", "Rumble",
-            "BLE scanning", "WiFi scanning", "Mark everything visible as mine", "Export signed report",
-            "Clear alerts", "Button test", "Theme", "PANIC WIPE (erase all data)", "Quit"]
+    def _menu(self) -> list:
+        """Data-driven menu: (label, value_fn|None, action_fn). No index juggling."""
+        s = self.w.sensor
+        on = lambda b: "ON" if b else "OFF"
+
+        def toggle_sensor(key):
+            v = not self.w.sensor.get(key, 1)
+            self.src.send(f"{key} {int(v)}")
+            self.w.sensor[key] = int(v)
+
+        def mark_all():
+            self.notify(f"{self.w.allow_all_visible()} devices marked as yours")
+            self.view = "list"
+
+        return [
+            ("Resume", None, lambda: setattr(self, "view", "list")),
+            ("Consult the Demon King", None, self.consult_oracle),
+            ("Channel spectrum", None, lambda: setattr(self, "view", "spectrum")),
+            ("Location", lambda: self.w.location + "  (A to change)", self.cycle_location),
+            ("Face buttons", lambda: self.inp.layout.upper() + (" (A right)" if self.inp.layout == "nintendo" else " (A bottom)"),
+             self.inp.toggle_layout),
+            ("Sound", lambda: on(not self.snd.muted), lambda: setattr(self.snd, "muted", not self.snd.muted)),
+            ("Dungeon music", lambda: on(self.music), self.toggle_music),
+            ("Rumble", lambda: on(self.rumble_on), self.toggle_rumble),
+            ("BLE scanning", lambda: on(s.get("ble", 1)), lambda: toggle_sensor("ble")),
+            ("WiFi scanning", lambda: on(s.get("wifi", 1)), lambda: toggle_sensor("wifi")),
+            ("Mark everything visible as mine", None, mark_all),
+            ("Export signed report", None, lambda: (self.export_report(), setattr(self, "view", "list"))),
+            ("Clear alerts", None, lambda: (self.w.alerts.clear(), self.notify("Alerts cleared"))),
+            ("Button test", None, self._open_buttontest),
+            ("Theme", lambda: self.theme.upper() + "  (A to change)", self.cycle_theme),
+            ("PANIC WIPE (erase all data)", None, self._open_wipe),
+            ("Quit", None, lambda: setattr(self, "running", False)),
+        ]
 
     def menu_value(self, i: int) -> str:
-        s = self.w.sensor
-        return {2: self.w.location + "  (A to change)",
-                3: self.inp.layout.upper() + (" (A right)" if self.inp.layout == "nintendo" else " (A bottom)"),
-                4: "OFF" if self.snd.muted else "ON", 5: "ON" if self.rumble_on else "OFF",
-                6: "ON" if s.get("ble", 1) else "OFF", 7: "ON" if s.get("wifi", 1) else "OFF",
-                12: self.theme.upper() + "  (A to change)"}.get(i, "")
+        fn = self._menu()[i][1]
+        return fn() if fn else ""
 
     def menu_activate(self, i: int) -> None:
-        if i == 0:
-            self.view = "list"
-        elif i == 1:
-            self.consult_oracle()
-        elif i == 2:
-            self.cycle_location()
-        elif i == 3:
-            self.inp.toggle_layout()
-        elif i == 4:
-            self.snd.muted = not self.snd.muted
-        elif i == 5:
-            self.rumble_on = not self.rumble_on
-            if self.rumble_on:
-                self.inp.rumble(0.6, 200)
-        elif i == 6:
-            on = not self.w.sensor.get("ble", 1)
-            self.src.send(f"ble {int(on)}")
-            self.w.sensor["ble"] = int(on)
-        elif i == 7:
-            on = not self.w.sensor.get("wifi", 1)
-            self.src.send(f"wifi {int(on)}")
-            self.w.sensor["wifi"] = int(on)
-        elif i == 8:
-            n = self.w.allow_all_visible()
-            self.notify(f"{n} devices marked as yours")
-            self.view = "list"
-        elif i == 9:
-            self.export_report()
-            self.view = "list"
-        elif i == 10:
-            self.w.alerts.clear()
-            self.notify("Alerts cleared")
-        elif i == 11:
-            self.view = "buttontest"
-            self._bt_started = time.monotonic()
-        elif i == 12:
-            self.cycle_theme()
-        elif i == 13:
-            self.view = "wipeconfirm"
-            self._wipe_hold = 0.0
-        elif i == 14:
-            self.running = False
+        self._menu()[i][2]()
         self.save()
+
+    def toggle_rumble(self) -> None:
+        self.rumble_on = not self.rumble_on
+        if self.rumble_on:
+            self.inp.rumble(0.6, 200)
+
+    def toggle_music(self) -> None:
+        self.music = not self.music
+        self.snd.ambient(self.music)
+        self.notify("Dungeon music " + ("on" if self.music else "off"))
+
+    def _open_buttontest(self) -> None:
+        self.view = "buttontest"
+        self._bt_started = time.monotonic()
+
+    def _open_wipe(self) -> None:
+        self.view = "wipeconfirm"
+        self._wipe_hold = 0.0
 
     def cycle_theme(self) -> None:
         i = (THEME_ORDER.index(self.theme) + 1) % len(THEME_ORDER) if self.theme in THEME_ORDER else 0
@@ -596,6 +633,10 @@ class App:
             elif act in (C.B, C.START):
                 self.view = "list"
             return
+        if v == "spectrum":
+            if act in (C.B, C.START, C.A):
+                self.view = "list"
+            return
         if v == "wipeconfirm":
             if act in (C.B, C.START):
                 self.view = "menu"
@@ -607,9 +648,9 @@ class App:
             return
         if v == "menu":
             if act == C.UP:
-                self.menu_sel = (self.menu_sel - 1) % len(self.MENU)
+                self.menu_sel = (self.menu_sel - 1) % len(self._menu())
             elif act == C.DOWN:
-                self.menu_sel = (self.menu_sel + 1) % len(self.MENU)
+                self.menu_sel = (self.menu_sel + 1) % len(self._menu())
             elif act in (C.A, C.RIGHT, C.LEFT):
                 self.menu_activate(self.menu_sel)
             elif act in (C.B, C.START):
@@ -668,6 +709,10 @@ class App:
                             HIGH if on else INFO)
             elif act == C.L1:
                 self.karma_test(self.detail_id)
+            elif act == C.L2 and self.detail_id:
+                armed = self.w.toggle_tripwire(self.detail_id, threshold=-60)
+                self.notify("TRIPWIRE armed - alarms when this comes close" if armed else "Tripwire disarmed",
+                            HIGH if armed else INFO)
             elif act == C.R2 and d and d.kind == "ap":
                 self.view = "scanconfirm"
             return
@@ -866,6 +911,8 @@ class App:
         u = self.u
         tab = TABS[self.tab]
         items = self.items()
+        if tab == "SOULS":
+            top = self._draw_souls_banner(top)
         gap = max(4, u // 4)
         row_h = int(u * 2.3)
         slot = row_h + gap
@@ -1067,6 +1114,24 @@ class App:
         span = ago(now - r["last"]) if r["last"] else "?"
         self.text(f"{r['n_days']} day(s) - last {span} ago", self.f_s, DIM, rx, y + int(u * 1.3), right=True)
 
+    def _draw_souls_banner(self, top: int) -> int:
+        from . import bestiary
+        u = self.u
+        souls = len(self.w.store.all()) if self.w.store else len(self.w.devices)
+        title, into, togo = bestiary.king_rank(souls)
+        self.text(f"RANK: {title}", self.f_l, ACCENT, u, top)
+        sub = f"{souls} souls claimed" + (f"   ·   {togo} more to ascend" if togo else "   ·   MAXIMUM POWER")
+        self.text(sub, self.f_s, DIM, self.W - u, top + u // 4, right=True)
+        # progress bar to next rank
+        if togo:
+            span = into + togo
+            frac = into / span if span else 1.0
+            bw = self.W - u * 2
+            by = top + int(u * 1.6)
+            pygame.draw.rect(self.screen, FAINT, (u, by, bw, u // 3), border_radius=u // 6)
+            pygame.draw.rect(self.screen, ACCENT, (u, by, int(bw * frac), u // 3), border_radius=u // 6)
+        return top + int(u * 2.3)
+
     def _row_soul(self, d, y, h, now):
         from . import bestiary
         u = self.u
@@ -1218,17 +1283,19 @@ class App:
         overlay = pygame.Surface((self.W, self.H), pygame.SRCALPHA)
         overlay.fill((0, 0, 0, 210))
         self.screen.blit(overlay, (0, 0))
-        mw, row = min(self.W - u * 2, u * 26), int(u * 1.5)
-        mh = row * len(self.MENU) + u * 3
-        x, y = (self.W - mw) // 2, (self.H - mh) // 2
-        pygame.draw.rect(self.screen, (16, 20, 26), (x, y, mw, mh), border_radius=u // 2)
-        self.text("MENU", self.f_m, ACCENT, x + u, y + u // 2)
+        entries = self._menu()
+        mw, row = min(self.W - u * 2, u * 28), int(u * 1.35)
+        mh = row * len(entries) + u * 3
+        x, y = (self.W - mw) // 2, max(u, (self.H - mh) // 2)
+        pygame.draw.rect(self.screen, PANEL, (x, y, mw, mh), border_radius=u // 2)
+        pygame.draw.rect(self.screen, BORDER, (x, y, mw, mh), 1, border_radius=u // 2)
+        self.text("MENU", self.f_mb, ACCENT, x + u, y + u // 2)
         y += u * 2
-        for i, item in enumerate(self.MENU):
+        for i, (label, val_fn, _) in enumerate(entries):
             if i == self.menu_sel:
-                pygame.draw.rect(self.screen, SEL_BG, (x + 4, y, mw - 8, row))
-            self.text(item, self.f_m, FG if i == self.menu_sel else DIM, x + u, y + (row - self.f_m.get_height()) // 2)
-            val = self.menu_value(i)
+                pygame.draw.rect(self.screen, SEL_BG, (x + 4, y, mw - 8, row), border_radius=u // 4)
+            self.text(label, self.f_m, FG if i == self.menu_sel else DIM, x + u, y + (row - self.f_m.get_height()) // 2)
+            val = val_fn() if val_fn else ""
             if val:
                 self.text(val, self.f_s, ACCENT, x + mw - u, y + (row - self.f_s.get_height()) // 2, right=True)
             y += row
@@ -1320,6 +1387,40 @@ class App:
         self.text("HOLD  A  TO WIPE" if frac < 1 else "WIPING...", self.f_l, LEVEL_COL[HIGH], cx, y, center=True)
         self.text("B to cancel", self.f_s, DIM, cx, bottom - u, center=True)
 
+    def draw_spectrum(self, top: int, bottom: int) -> None:
+        u = self.u
+        act = self.w.channel_activity()
+        clean = self.w.cleanest_channel()
+        cur = self.w.sensor.get("ch", 0)
+        self.text("2.4 GHz CHANNEL SPECTRUM", self.f_l, ACCENT, self.W // 2, top + u // 2, center=True)
+        gx0, gx1 = u * 2, self.W - u * 2
+        base = bottom - int(u * 2.5)
+        gh = base - (top + int(u * 2.5))
+        n = 13
+        bw = (gx1 - gx0) / n
+        peak = max(1.0, max(v["score"] for v in act.values()))
+        t = time.monotonic()
+        for ch in range(1, 14):
+            v = act[ch]
+            frac = v["score"] / peak
+            # gentle live shimmer
+            frac *= 0.92 + 0.08 * math.sin(t * 3 + ch)
+            bh = int(gh * min(1.0, frac))
+            x = int(gx0 + (ch - 1) * bw)
+            busy = frac > 0.66
+            col = LEVEL_COL[HIGH] if busy else LEVEL_COL[WARN] if frac > 0.33 else GOOD
+            if ch in (1, 6, 11):
+                pygame.draw.rect(self.screen, FAINT, (x + 3, top + int(u * 2.5), bw - 6, gh), 1)
+            pygame.draw.rect(self.screen, col, (x + 5, base - bh, bw - 10, bh), border_radius=4)
+            lab_col = ACCENT if ch == cur else (GOOD if ch == clean else DIM)
+            self.text(f"{ch}", self.f_m, lab_col, int(x + bw / 2), base + u // 4, center=True)
+            if v["aps"]:
+                self.text(f"{v['aps']}", self.f_s, DIM, int(x + bw / 2), base - bh - int(u * 0.9), center=True)
+            if ch == cur:
+                self.text("scan", self.f_s, ACCENT, int(x + bw / 2), base - bh - int(u * 1.7), center=True)
+        self.text(f"Cleanest of 1/6/11: channel {clean}   ·   sensor on ch {cur or '?'}",
+                  self.f_m, FG, self.W // 2, bottom - int(u * 1.3), center=True)
+
     def draw_oracle(self, top: int, bottom: int) -> None:
         u = self.u
         o = self._oracle or {}
@@ -1399,6 +1500,8 @@ class App:
         v = self.view
         if v == "oracle":
             return [("A", "ask again"), ("B", "back")]
+        if v == "spectrum":
+            return [("B", "back")]
         if v == "wipeconfirm":
             return [("A", "hold to wipe"), ("B", "cancel")]
         if v == "hunt":
@@ -1407,9 +1510,9 @@ class App:
             d = self.w.devices.get(self.detail_id or "")
         if v == "detail":
             d = self.w.devices.get(self.detail_id or "")
-            h = [("A", "hunt"), ("B", "back"), ("Y", "mine"), ("R1", "watchlist")]
+            h = [("A", "hunt"), ("B", "back"), ("Y", "mine"), ("R1", "watch"), ("L2", "tripwire")]
             if d and d.kind == "ap":
-                h += [("L1", "karma test"), ("R2", "join & scan")]
+                h += [("L1", "karma"), ("R2", "scan")]
             return h
         if v == "scanconfirm":
             return [("A", "join & scan"), ("B", "cancel")]
@@ -1534,6 +1637,8 @@ class App:
             self.draw_scanview(y, bottom)
         elif self.view == "oracle":
             self.draw_oracle(y, bottom)
+        elif self.view == "spectrum":
+            self.draw_spectrum(y, bottom)
         elif self.view == "wipeconfirm":
             self.draw_wipeconfirm(y, bottom)
         if self.view == "menu":

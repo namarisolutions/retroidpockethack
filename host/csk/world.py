@@ -22,6 +22,7 @@ from .bleparse import HIGH, INFO, WARN
 CONFIG_DIR = os.path.expanduser(os.environ.get("CSK_CONFIG_DIR", "~/.config/csk"))
 ALLOW_FILE = os.path.join(CONFIG_DIR, "allow.json")
 WATCH_FILE = os.path.join(CONFIG_DIR, "watch.json")
+TRIPWIRE_FILE = os.path.join(CONFIG_DIR, "tripwires.json")
 
 # Well-known public hotspot names that are popular to impersonate, with the
 # security each one really uses (0 = open, 2 = WPA/802.1X, None = varies).
@@ -155,6 +156,7 @@ class World:
         self.last_msg = 0.0
         self.allow: dict[str, str] = self._load_json(ALLOW_FILE)
         self.watch: dict[str, dict] = self._load_json(WATCH_FILE)
+        self.tripwires: dict[str, dict] = self._load_json(TRIPWIRE_FILE)
         self.karma_pending: tuple[str, int, str] | None = None   # (canary, ch, target id)
         self.karma_results: list[dict] = []
         self.canaries: set[str] = set()
@@ -476,6 +478,15 @@ class World:
             self._raise(found, "deauth", HIGH, "Deauth attack in progress",
                         f"{total} deauth/disassoc frames in {int(DEAUTH_WINDOW)}s, {len(srcs)} sources, ch {chs}")
 
+        # Tripwires: alarm when a chosen device comes within its signal threshold.
+        # Set directly (not via _raise) so it fires even for allowlisted devices -
+        # you can arm a tripwire on your OWN gear to find it, or on a watched tail.
+        for dev_id, tw in self.tripwires.items():
+            d = self.devices.get(dev_id)
+            if d and now - d.last <= 30 and d.rssi >= tw.get("threshold", -60):
+                found["trip:" + dev_id] = (HIGH, f"TRIPWIRE: {tw.get('title') or d.title()}",
+                                           f"is close - {d.rssi} dBm (armed at {tw.get('threshold', -60)})", dev_id)
+
         # BLE spam: a flood of pairing-popup adverts from many random MACs
         # (Flipper Zero / "AppleJuice"-style attacks that spam pairing dialogs).
         while self.ble_spam and now - self.ble_spam[0][0] > BLE_SPAM_WINDOW:
@@ -615,6 +626,51 @@ class World:
             det = (f"seen at {r['n_locations']} of your locations ({', '.join(r['locations'][:4])}) "
                    f"on {r['n_days']} day(s)")
             self._raise(found, "recur:" + mac, lvl, f"Seen repeatedly: {title}", det, dev_id or "")
+
+    def channel_activity(self, within: float = 180.0) -> dict:
+        """Per-2.4GHz-channel activity: AP count, client count, traffic, best signal.
+        Feeds the spectrum analyzer and a 'cleanest channel' suggestion."""
+        now = self.clock()
+        chans = {c: {"aps": 0, "clients": 0, "bytes": 0, "rssi": -127, "score": 0.0} for c in range(1, 14)}
+        for d in self.devices.values():
+            if now - d.last > within or not (1 <= d.ch <= 13):
+                continue
+            c = chans[d.ch]
+            if d.kind == "ap":
+                c["aps"] += 1
+                c["score"] += 1.0 + max(0.0, (d.rssi + 100) / 70)
+            elif d.kind == "wifi":
+                c["clients"] += 1
+                c["bytes"] += int(d.uplink_bps(now))
+                c["score"] += 0.5
+            c["rssi"] = max(c["rssi"], d.rssi)
+        # 20MHz channels overlap; spread a fraction of each channel's score to neighbours
+        spread = {c: v["score"] for c, v in chans.items()}
+        for c in range(1, 14):
+            for n in (c - 1, c + 1):
+                if 1 <= n <= 13:
+                    chans[c]["score"] += spread[n] * 0.4
+        return chans
+
+    def cleanest_channel(self) -> int:
+        act = self.channel_activity()
+        return min((1, 6, 11), key=lambda c: act[c]["score"])
+
+    # ------------------------------------------------------------- tripwires
+    def toggle_tripwire(self, dev_id: str, threshold: int = -60) -> bool:
+        d = self.devices.get(dev_id)
+        if dev_id in self.tripwires:
+            del self.tripwires[dev_id]
+        else:
+            self.tripwires[dev_id] = {"threshold": threshold, "title": d.title() if d else "",
+                                      "addr": d.addr if d else ""}
+        try:
+            os.makedirs(CONFIG_DIR, exist_ok=True)
+            with open(TRIPWIRE_FILE, "w") as f:
+                json.dump(self.tripwires, f, indent=1)
+        except OSError:
+            pass
+        return dev_id in self.tripwires
 
     def topology(self, within: float = 180.0) -> list[dict]:
         """Group recent WiFi clients under the AP they're associated with.

@@ -43,3 +43,19 @@ def rank(category: str) -> str:
 
 def soul_line(mac: str, category: str) -> str:
     return f"{monster_name(mac)}  -  {rank(category)}"
+
+
+# King's rank ladder by number of souls claimed (unique devices ever seen).
+_RANKS = [(0, "Restless Spirit"), (5, "Imp"), (15, "Hex-Knight"), (40, "Warlock"),
+          (100, "Dread Baron"), (250, "Lich"), (600, "Demon Lord"), (1500, "THE UNKILLABLE KING")]
+
+
+def king_rank(souls: int) -> tuple[str, int, int]:
+    """Return (title, souls_into_rank, souls_to_next). next=0 at the top."""
+    title, floor = _RANKS[0][1], 0
+    nxt = 0
+    for i, (need, name) in enumerate(_RANKS):
+        if souls >= need:
+            title, floor = name, need
+            nxt = _RANKS[i + 1][0] if i + 1 < len(_RANKS) else 0
+    return title, souls - floor, (nxt - souls if nxt else 0)
