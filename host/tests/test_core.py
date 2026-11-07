@@ -744,3 +744,58 @@ def test_dungeon_theme_is_serif():
     assert U.SERIF and U.TEXTURE == "dungeon"
     U.apply_theme("hellfire")
     assert not U.SERIF
+
+
+# ------------------------------------------------------------------ guard net + auto-location
+def test_guard_network_imposter_alert():
+    clk = Clock()
+    w = World(clock=clk)
+    # your real router
+    w.ingest({"t": "ap", "b": "10:00:00:00:00:01", "s": b"MyHome".hex(), "ch": 6, "e": 2, "r": -45, "n": 5})
+    w.toggle_allow("ap:10:00:00:00:00:01")          # mark mine -> auto-guards "MyHome"
+    assert "MyHome" in w.guard and "10:00:00:00:00:01" in w.guard["MyHome"]
+    w.evaluate()
+    assert not any(k.startswith("imposter:") for k in w.alerts)   # only your router: no imposter
+    # a clone from a different radio
+    w.ingest({"t": "ap", "b": "9e:66:77:88:99:aa", "s": b"MyHome".hex(), "ch": 11, "e": 0, "r": -55, "n": 5})
+    w.evaluate()
+    a = w.alerts["imposter:ap:9e:66:77:88:99:aa"]
+    assert a.level == HIGH and "MyHome" in a.title and "not your router" in a.detail
+
+
+def _aps(w, clk, prefix, n):
+    for i in range(n):
+        clk.t += 0.1
+        w.ingest({"t": "ap", "b": f"10:{prefix}:00:00:00:{i:02x}", "s": f"net{i}".encode().hex(),
+                  "ch": 6, "e": 2, "r": -55, "n": 3})
+
+
+def test_auto_location_learns_and_switches():
+    clk = Clock()
+    w = World(clock=clk)
+    w.set_location("home")              # learns nothing yet (no APs)
+    _aps(w, clk, "aa", 5)
+    w.learn_location_fingerprint()      # home = {aa APs}
+    assert len(w.loc_fp["home"]) == 5
+    # move to "work": a different AP set
+    w.devices.clear()
+    _aps(w, clk, "bb", 5)
+    w.set_location("work")              # learns work fingerprint
+    assert set(w.loc_fp) == {"home", "work"}
+    # now back where "home" APs are visible -> auto_locate returns "home"
+    w.devices.clear()
+    _aps(w, clk, "aa", 5)
+    assert w.auto_locate(min_interval=0) == "home"
+    # at an unknown place -> no switch
+    w.devices.clear()
+    _aps(w, clk, "cc", 5)
+    assert w.auto_locate(min_interval=0) is None
+
+
+def test_auto_location_needs_enough_aps():
+    clk = Clock()
+    w = World(clock=clk)
+    w.loc_fp.clear()                     # isolate from other tests' persisted fingerprints
+    _aps(w, clk, "zz", 2)               # too few to fingerprint
+    assert w.learn_location_fingerprint() == 2
+    assert "default" not in w.loc_fp     # nothing written for <3 APs

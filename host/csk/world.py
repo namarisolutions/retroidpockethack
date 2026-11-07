@@ -23,6 +23,12 @@ CONFIG_DIR = os.path.expanduser(os.environ.get("CSK_CONFIG_DIR", "~/.config/csk"
 ALLOW_FILE = os.path.join(CONFIG_DIR, "allow.json")
 WATCH_FILE = os.path.join(CONFIG_DIR, "watch.json")
 TRIPWIRE_FILE = os.path.join(CONFIG_DIR, "tripwires.json")
+GUARD_FILE = os.path.join(CONFIG_DIR, "guard.json")
+LOCFP_FILE = os.path.join(CONFIG_DIR, "loc_fingerprints.json")
+
+LOC_MIN_APS = 3            # need at least this many stable APs to fingerprint a place
+LOC_MATCH_SHARED = 3      # shared APs to call it the same place
+LOC_MATCH_RATIO = 0.5
 
 # Well-known public hotspot names that are popular to impersonate, with the
 # security each one really uses (0 = open, 2 = WPA/802.1X, None = varies).
@@ -157,6 +163,10 @@ class World:
         self.allow: dict[str, str] = self._load_json(ALLOW_FILE)
         self.watch: dict[str, dict] = self._load_json(WATCH_FILE)
         self.tripwires: dict[str, dict] = self._load_json(TRIPWIRE_FILE)
+        self.guard: dict[str, list] = self._load_json(GUARD_FILE)
+        self.loc_fp: dict[str, list] = self._load_json(LOCFP_FILE)   # location -> [bssid,...]
+        self.auto_locate_on = True
+        self._last_autoloc = 0.0
         self.karma_pending: tuple[str, int, str] | None = None   # (canary, ch, target id)
         self.karma_results: list[dict] = []
         self.canaries: set[str] = set()
@@ -175,10 +185,14 @@ class World:
             return {}
 
     def _save_allow(self) -> None:
+        self._save_json(ALLOW_FILE, self.allow)
+
+    @staticmethod
+    def _save_json(path: str, data) -> None:
         try:
             os.makedirs(CONFIG_DIR, exist_ok=True)
-            with open(ALLOW_FILE, "w") as f:
-                json.dump(self.allow, f, indent=1)
+            with open(path, "w") as f:
+                json.dump(data, f, indent=1)
         except OSError:
             pass
 
@@ -227,15 +241,39 @@ class World:
         return dev_id in self.allow
 
     def toggle_allow(self, dev_id: str) -> bool:
+        d = self.devices.get(dev_id)
         if dev_id in self.allow:
             del self.allow[dev_id]
+            if d and d.kind == "ap":
+                self._guard_ap(d, add=False)
         else:
-            d = self.devices.get(dev_id)
             self.allow[dev_id] = d.title() if d else ""
             for k in [k for k, a in self.alerts.items() if a.dev_id == dev_id]:
                 del self.alerts[k]
+            if d and d.kind == "ap":
+                self._guard_ap(d, add=True)   # marking your own AP "mine" protects its name
         self._save_allow()
         return dev_id in self.allow
+
+    # -------------------------------------------------- guard my networks
+    def _guard_ap(self, d: "Device", add: bool) -> None:
+        for ssid in [s for s in d.ssids if s]:
+            bssids = set(self.guard.get(ssid, []))
+            if add:
+                bssids.add(d.addr)
+            else:
+                bssids.discard(d.addr)
+            if bssids:
+                self.guard[ssid] = sorted(bssids)
+            else:
+                self.guard.pop(ssid, None)
+        self._save_json(GUARD_FILE, self.guard)
+
+    def guard_network(self, ssid: str, bssid: str) -> None:
+        self.guard.setdefault(ssid, [])
+        if bssid not in self.guard[ssid]:
+            self.guard[ssid].append(bssid)
+        self._save_json(GUARD_FILE, self.guard)
 
     def allow_all_visible(self, within: float = 60.0) -> int:
         now = self.clock()
@@ -454,6 +492,18 @@ class World:
         # Impersonated public hotspots (fake xfinitywifi etc.)
         self._impersonation(found, now)
 
+        # Imposter of YOUR guarded network: your SSID broadcast from a radio
+        # that isn't yours. Someone cloning your WiFi to phish/auto-join you.
+        for d in self.devices.values():
+            if d.kind != "ap" or now - d.last > 180:
+                continue
+            for ssid in [s for s in d.ssids if s in self.guard]:
+                if d.addr not in self.guard[ssid] and not self.is_allowed(d.id):
+                    self._raise(found, "imposter:" + d.id, HIGH,
+                                f"IMPOSTER of your network '{ssid}'",
+                                f"{d.addr} is broadcasting YOUR network name but is not your router "
+                                f"(ch{d.ch}, {d.rssi} dBm) - do not connect", d.id)
+
         # Evil twin: same SSID, both open and encrypted
         by_ssid: dict[str, set] = {}
         for d in self.devices.values():
@@ -585,8 +635,57 @@ class World:
                if d.stable_id and d.category != "random" and len(d.checkpoints) >= 2 and not self.is_allowed(d.id)]
         return sorted(out, key=lambda d: (-len(d.checkpoints), -d.last))
 
-    def set_location(self, name: str) -> None:
+    def set_location(self, name: str, learn: bool = True) -> None:
         self.location = name or "default"
+        if learn:
+            self.learn_location_fingerprint()
+
+    def _visible_aps(self, within: float = 60.0, min_rssi: int = -78) -> set:
+        """Stable, strong APs visible now - the fingerprint of a place."""
+        now = self.clock()
+        return {d.addr for d in self.devices.values()
+                if d.kind == "ap" and now - d.last <= within and d.rssi >= min_rssi
+                and not oui.is_randomized(d.addr)}
+
+    def learn_location_fingerprint(self) -> int:
+        """Snapshot the currently-visible APs as the fingerprint for the active
+        location (merged with what's already learned). Returns the AP count."""
+        aps = self._visible_aps()
+        if len(aps) < LOC_MIN_APS:
+            return len(aps)
+        prev = set(self.loc_fp.get(self.location, []))
+        self.loc_fp[self.location] = sorted(prev | aps)
+        self._save_json(LOCFP_FILE, self.loc_fp)
+        return len(aps)
+
+    def auto_locate(self, min_interval: float = 15.0) -> str | None:
+        """If the visible APs strongly match a different known location, return
+        its name (the UI switches to it). Rate-limited; returns None otherwise."""
+        now = self.clock()
+        if not self.auto_locate_on or now - self._last_autoloc < min_interval:
+            return None
+        self._last_autoloc = now
+        cur = self._visible_aps()
+        if len(cur) < LOC_MIN_APS:
+            return None
+        best, best_score = None, 0.0
+        for name, fp in self.loc_fp.items():
+            fp = set(fp)
+            shared = len(cur & fp)
+            if not fp:
+                continue
+            ratio = shared / min(len(cur), len(fp))
+            if shared >= LOC_MATCH_SHARED and ratio >= LOC_MATCH_RATIO and ratio > best_score:
+                best, best_score = name, ratio
+        if best and best != self.location:
+            return best
+        # no match to a known place and we've drifted away from the current one:
+        # reinforce current only if it still matches, else leave for manual naming
+        if self.location in self.loc_fp:
+            fp = set(self.loc_fp[self.location])
+            if fp and len(cur & fp) >= LOC_MATCH_SHARED:
+                self.learn_location_fingerprint()
+        return None
 
     def persist_sightings(self, min_interval: float = 20.0) -> int:
         """Write current stable, non-ignored devices to the persistent store under

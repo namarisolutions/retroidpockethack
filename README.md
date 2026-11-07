@@ -36,6 +36,7 @@ network (see below).
 | **Fake public hotspots** (fake `xfinitywifi`, `XFINITY`, `attwifi`, `CableWiFi`, …) | real carrier gateways broadcast several sibling networks from near-identical MACs with one beacon layout. A fake is usually alone, often on a made-up MAC, has a beacon fingerprint that differs from the real ones nearby, or uses the wrong security (e.g. an *open* `XFINITY`) |
 | **Evil twin** | same SSID broadcast both open and encrypted |
 | **Deauth attacks** (jammers, handshake capture, knocking cameras offline) | deauth/disassoc frame rate |
+| **Imposter of YOUR network** | an AP broadcasting a network name you've marked as yours, from a radio that isn't your router (targeted evil-twin / auto-join phishing) |
 | **BLE spam attacks** (Flipper Zero / "AppleJuice" pairing-popup floods) | many random MACs spamming Apple/FastPair/SwiftPair/Samsung pairing prompts in a short window |
 | **Drone (Remote ID)** | ASTM/FAA drone broadcast - reveals drone + operator location (see below) |
 
@@ -245,6 +246,14 @@ event buffer is too small for a full message pack today).
 - **SOULS / bestiary:** the King names every device it detects - a deterministic
   monster name from the MAC (e.g. an AirTag becomes the "Writhing Revenant",
   ranked EYE-TYRANT / PARASITE / SKY-DEMON by category). Pure flavour.
+- **Guard my network:** mark your own router as *mine* (Y) and the kit then
+  screams if any AP broadcasts that network's name from a different radio -
+  someone cloning your WiFi to phish you or make your phone auto-join. Auto-set
+  when you mark an AP yours; stored in `guard.json`.
+- **Auto-location (by WiFi):** instead of pressing X at every new place, the kit
+  fingerprints each place by the set of strong APs around you and switches the
+  location label automatically when it recognises one - so cross-day following
+  works hands-free. Toggle in the menu; learns a place when you name it.
 - **Channel spectrum** (Menu > Channel spectrum): a live 2.4 GHz analyzer -
   bar per channel showing AP/traffic activity, 1/6/11 marked, the sensor's
   current scan channel flagged, and a "cleanest channel" suggestion.

@@ -338,6 +338,7 @@ class App:
         "drone": ["A MACHINE WATCHES FROM ABOVE.", "WINGS IN THE SKY. I SEE ITS MASTER.", "EYES IN THE AIR. I HAVE ITS PILOT."],
         "blespam": ["A SWARM OF PHANTOMS! AN ATTACK.", "LIES FLOOD THE AETHER. IGNORE THEM."],
         "tripwire": ["THE SNARE IS SPRUNG!", "IT RETURNS. I FELT IT CROSS MY THRESHOLD."],
+        "imposter": ["A THIEF WEARS YOUR FACE!", "THIS GATE IS A FORGERY OF YOUR OWN."],
         "clear": ["THE AIR IS CLEAN... FOR NOW.", "ALL IS QUIET. I REMAIN VIGILANT."],
     }
 
@@ -350,7 +351,7 @@ class App:
         self.voiceline = (random.choice(lines), mood, time.monotonic() + secs)
         self.snd.play({"boot": "boot", "rogue": "rogue", "camera": "camera", "tracker": "tracker",
                        "deauth": "rage", "follow": "found", "drone": "camera", "blespam": "rage",
-                       "tripwire": "found", "clear": "clear"}.get(event, "blip"))
+                       "tripwire": "found", "imposter": "rogue", "clear": "clear"}.get(event, "blip"))
 
     def _event_for_alert(self, a) -> str:
         t = a.title.lower()
@@ -362,6 +363,8 @@ class App:
             return "camera"
         if "tracker" in t or "find my" in t or "tile" in t or "tag" in t:
             return "tracker"
+        if "imposter" in t:
+            return "imposter"
         if "tripwire" in t:
             return "tripwire"
         if "spam" in t:
@@ -537,6 +540,7 @@ class App:
             ("Consult the Demon King", None, self.consult_oracle),
             ("Channel spectrum", None, lambda: setattr(self, "view", "spectrum")),
             ("Location", lambda: self.w.location + "  (A to change)", self.cycle_location),
+            ("Auto-location (by WiFi)", lambda: ("ON" if self.w.auto_locate_on else "OFF"), self.toggle_autoloc),
             ("Face buttons", lambda: self.inp.layout.upper() + (" (A right)" if self.inp.layout == "nintendo" else " (A bottom)"),
              self.inp.toggle_layout),
             ("Sound", lambda: on(not self.snd.muted), lambda: setattr(self.snd, "muted", not self.snd.muted)),
@@ -565,6 +569,12 @@ class App:
         self.rumble_on = not self.rumble_on
         if self.rumble_on:
             self.inp.rumble(0.6, 200)
+
+    def toggle_autoloc(self) -> None:
+        self.w.auto_locate_on = not self.w.auto_locate_on
+        if self.w.auto_locate_on:
+            self.w.learn_location_fingerprint()
+        self.notify("Auto-location " + ("on - learning this place" if self.w.auto_locate_on else "off"))
 
     def toggle_music(self) -> None:
         self.music = not self.music
@@ -1657,6 +1667,11 @@ class App:
         if time.monotonic() - self._last_eval > 1.0:
             self._last_eval = time.monotonic()
             self.w.persist_sightings()
+            moved = self.w.auto_locate()
+            if moved:
+                self.loc_idx = self.locations.index(moved) if moved in self.locations else self.loc_idx
+                self.w.set_location(moved, learn=False)
+                self.notify(f"Auto-location: you're at '{moved}'", INFO, 4)
             for a in self.w.evaluate():
                 if a.level >= WARN:
                     self.notify(a.title, a.level, 5.0)
