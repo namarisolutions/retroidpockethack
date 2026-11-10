@@ -157,6 +157,9 @@ class World:
         self.checkpoint_times: list[float] = [clock()]
         self.deauth_events: deque = deque()   # (t, n, src, dst, rssi, ch)
         self.ble_spam: deque = deque()        # (t, mac, kind) pairing-popup ads
+        self.arp_now: dict[str, str] = {}     # latest ip -> mac from the ARP table
+        self.arp_gateway: str | None = None
+        self.arp_baseline: dict[str, str] = {}  # first-seen ip -> mac (trusted)
         self.sensor: dict = {}
         self.sensor_hello: dict = {}
         self.last_msg = 0.0
@@ -551,6 +554,10 @@ class World:
                         f"{len(spam_macs)} fake devices in {int(BLE_SPAM_WINDOW)}s spamming {top} "
                         f"pairing prompts - a nearby device is attacking phones")
 
+        # ARP spoofing / man-in-the-middle: the signature of someone intercepting
+        # (sniffing) your network traffic.
+        self._arp_mitm(found)
+
         # Persistent cross-day / cross-location recurrence (survives restarts)
         self.recurring_alerts(found, now)
 
@@ -725,6 +732,37 @@ class World:
             det = (f"seen at {r['n_locations']} of your locations ({', '.join(r['locations'][:4])}) "
                    f"on {r['n_days']} day(s)")
             self._raise(found, "recur:" + mac, lvl, f"Seen repeatedly: {title}", det, dev_id or "")
+
+    # --------------------------------------------------- ARP spoof / MITM
+    def set_arp(self, arp_map: dict, gateway: str | None) -> None:
+        """Feed the current ARP table (ip->mac) + gateway IP. On the first good
+        read we snapshot a trusted baseline; later reads are compared to it."""
+        arp_map = {ip: m.lower() for ip, m in arp_map.items() if m and m != "00:00:00:00:00:00"}
+        self.arp_now = arp_map
+        self.arp_gateway = gateway or self.arp_gateway
+        for ip, mac in arp_map.items():
+            self.arp_baseline.setdefault(ip, mac)
+
+    def _arp_mitm(self, found: dict) -> None:
+        arp = self.arp_now
+        if not arp:
+            return
+        gw = self.arp_gateway
+        # 1) The router's hardware address changed -> classic MITM (attacker is
+        #    pretending to be your gateway to intercept everything).
+        if gw and gw in arp and gw in self.arp_baseline and arp[gw] != self.arp_baseline[gw]:
+            self._raise(found, "arp:gw", HIGH, "Possible MITM: your router's address changed",
+                        f"gateway {gw} was {self.arp_baseline[gw]}, now {arp[gw]} - someone may be "
+                        f"intercepting your traffic")
+        # 2) One MAC answering for many IPs -> ARP spoofing (poisoning the LAN).
+        by_mac: dict[str, list] = {}
+        for ip, mac in arp.items():
+            by_mac.setdefault(mac, []).append(ip)
+        for mac, ips in by_mac.items():
+            if len(ips) >= 3:
+                self._raise(found, "arp:dup:" + mac, HIGH, "ARP spoofing on your network",
+                            f"one device ({mac}) is answering for {len(ips)} addresses "
+                            f"({', '.join(sorted(ips)[:4])}...) - a sniffer/MITM is poisoning the network")
 
     def channel_activity(self, within: float = 180.0) -> dict:
         """Per-2.4GHz-channel activity: AP count, client count, traffic, best signal.

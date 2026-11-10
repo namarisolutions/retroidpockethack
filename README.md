@@ -37,6 +37,7 @@ network (see below).
 | **Evil twin** | same SSID broadcast both open and encrypted |
 | **Deauth attacks** (jammers, handshake capture, knocking cameras offline) | deauth/disassoc frame rate |
 | **Imposter of YOUR network** | an AP broadcasting a network name you've marked as yours, from a radio that isn't your router (targeted evil-twin / auto-join phishing) |
+| **Traffic interception (MITM / ARP spoofing)** | a device on your network pretending to be your router, or one MAC answering for many IPs - the signature of someone *sniffing your traffic*. Read from the Flip's own ARP table while it's on the network |
 | **BLE spam attacks** (Flipper Zero / "AppleJuice" pairing-popup floods) | many random MACs spamming Apple/FastPair/SwiftPair/Samsung pairing prompts in a short window |
 | **Drone (Remote ID)** | ASTM/FAA drone broadcast - reveals drone + operator location (see below) |
 

@@ -799,3 +799,49 @@ def test_auto_location_needs_enough_aps():
     _aps(w, clk, "zz", 2)               # too few to fingerprint
     assert w.learn_location_fingerprint() == 2
     assert "default" not in w.loc_fp     # nothing written for <3 APs
+
+
+# ------------------------------------------------------------------ arp spoof / MITM
+def test_arp_gateway_mac_change_is_mitm():
+    clk = Clock()
+    w = World(clock=clk)
+    # trusted baseline: router at .1 has a MAC
+    w.set_arp({"192.168.1.1": "aa:bb:cc:00:00:01", "192.168.1.5": "11:22:33:00:00:05"}, "192.168.1.1")
+    w.evaluate()
+    assert not any(k.startswith("arp:") for k in w.alerts)
+    # attacker now claims to be the router
+    w.set_arp({"192.168.1.1": "de:ad:be:ef:00:99", "192.168.1.5": "11:22:33:00:00:05"}, "192.168.1.1")
+    w.evaluate()
+    a = w.alerts["arp:gw"]
+    assert a.level == HIGH and "router" in a.title.lower() and "de:ad:be:ef:00:99" in a.detail
+
+
+def test_arp_one_mac_many_ips_is_spoof():
+    clk = Clock()
+    w = World(clock=clk)
+    attacker = "de:ad:be:ef:00:01"
+    w.set_arp({"192.168.1.1": attacker, "192.168.1.2": attacker, "192.168.1.3": attacker,
+               "192.168.1.9": "11:22:33:44:55:66"}, "192.168.1.1")
+    w.evaluate()
+    a = w.alerts["arp:dup:" + attacker]
+    assert a.level == HIGH and "answering for 3 addresses" in a.detail
+
+
+def test_arp_clean_network_no_alert():
+    clk = Clock()
+    w = World(clock=clk)
+    w.set_arp({f"192.168.1.{i}": f"aa:bb:cc:00:00:{i:02x}" for i in range(1, 8)}, "192.168.1.1")
+    w.evaluate()
+    assert not any(k.startswith("arp:") for k in w.alerts)
+
+
+def test_netscan_gateway_parses_proc_route(monkeypatch, tmp_path):
+    from csk import netscan
+    # default route to 192.168.1.1: dest 00000000, gw little-endian 0101A8C0, flags 0003
+    route = ("Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\tMTU\tWindow\tIRTT\n"
+             "wlan0\t00000000\t0101A8C0\t0003\t0\t0\t600\t00000000\t0\t0\t0\n")
+    f = tmp_path / "route"
+    f.write_text(route)
+    orig_open = open
+    monkeypatch.setattr("builtins.open", lambda p, *a, **k: orig_open(f, *a, **k) if p == "/proc/net/route" else orig_open(p, *a, **k))
+    assert netscan.gateway() == "192.168.1.1"

@@ -121,6 +121,12 @@ def run(src, world, store: Store, notifier, cfg: dict, interval_rf=1.0):
                         notifier.send(a.level, a.title, a.detail)
             if now >= next_scan:
                 netmon.tick()
+                if world is not None:
+                    world.set_arp(netscan.read_arp(), netscan.gateway())
+                    for a in world.evaluate():
+                        if a.key.startswith("arp:"):
+                            store.log_event(a.level, "lan", "", a.title, a.detail)
+                            notifier.send(a.level, a.title, a.detail)
                 next_scan = now + scan_interval
             if now >= next_report:
                 try:

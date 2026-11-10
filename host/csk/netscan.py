@@ -56,6 +56,21 @@ def read_arp() -> dict[str, str]:
     return out
 
 
+def gateway() -> str | None:
+    """Your router's IP (the default-route gateway), from /proc/net/route."""
+    import socket
+    import struct
+    try:
+        with open("/proc/net/route") as f:
+            for line in list(f)[1:]:
+                p = line.split()
+                if len(p) > 3 and p[1] == "00000000" and int(p[3], 16) & 0x2:  # default + RTF_GATEWAY
+                    return socket.inet_ntoa(struct.pack("<I", int(p[2], 16)))
+    except (OSError, ValueError):
+        pass
+    return None
+
+
 def _probe_host(ip: str, ports: list[int], timeout: float) -> list[int]:
     open_ports = []
     for port in ports:

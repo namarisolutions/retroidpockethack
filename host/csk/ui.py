@@ -302,6 +302,7 @@ class App:
         self.toast: tuple[str, int, float] | None = None
         self.running = True
         self._last_eval = 0.0
+        self._last_arp = 0.0
         self._next_click = 0.0
         self._hunt_locked = False
         self._scan: dict = {"running": False, "steps": [], "result": None, "sel": 0}
@@ -339,6 +340,7 @@ class App:
         "blespam": ["A SWARM OF PHANTOMS! AN ATTACK.", "LIES FLOOD THE AETHER. IGNORE THEM."],
         "tripwire": ["THE SNARE IS SPRUNG!", "IT RETURNS. I FELT IT CROSS MY THRESHOLD."],
         "imposter": ["A THIEF WEARS YOUR FACE!", "THIS GATE IS A FORGERY OF YOUR OWN."],
+        "mitm": ["A SPY SITS BETWEEN YOU AND THE WORLD.", "YOUR MESSENGER HAS BEEN REPLACED BY A TRAITOR."],
         "clear": ["THE AIR IS CLEAN... FOR NOW.", "ALL IS QUIET. I REMAIN VIGILANT."],
     }
 
@@ -351,7 +353,7 @@ class App:
         self.voiceline = (random.choice(lines), mood, time.monotonic() + secs)
         self.snd.play({"boot": "boot", "rogue": "rogue", "camera": "camera", "tracker": "tracker",
                        "deauth": "rage", "follow": "found", "drone": "camera", "blespam": "rage",
-                       "tripwire": "found", "imposter": "rogue", "clear": "clear"}.get(event, "blip"))
+                       "tripwire": "found", "imposter": "rogue", "mitm": "rage", "clear": "clear"}.get(event, "blip"))
 
     def _event_for_alert(self, a) -> str:
         t = a.title.lower()
@@ -363,6 +365,8 @@ class App:
             return "camera"
         if "tracker" in t or "find my" in t or "tile" in t or "tag" in t:
             return "tracker"
+        if "mitm" in t or "arp" in t or "intercept" in t:
+            return "mitm"
         if "imposter" in t:
             return "imposter"
         if "tripwire" in t:
@@ -1686,6 +1690,13 @@ class App:
             self.w.ingest(msg)
         if self.view == "boot" and time.monotonic() > self._boot_until:
             self.view = "list"
+        if time.monotonic() - self._last_arp > 20.0:
+            self._last_arp = time.monotonic()
+            try:
+                from . import netscan
+                self.w.set_arp(netscan.read_arp(), netscan.gateway())
+            except Exception:
+                pass
         if time.monotonic() - self._last_eval > 1.0:
             self._last_eval = time.monotonic()
             self.w.persist_sightings()
