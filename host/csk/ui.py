@@ -841,6 +841,27 @@ class App:
             return "calm"
         return "rage" if max(levels) >= HIGH else "alert"
 
+    def is_demo(self) -> bool:
+        h = self.w.sensor_hello
+        return h.get("chip") == "SIM" or "demo" in str(h.get("fw", ""))
+
+    def draw_mode_banner(self, y: int) -> int:
+        """Loud, always-visible strip: DEMO (fake data) or SENSOR OFFLINE."""
+        u = self.u
+        msg = col = None
+        if self.is_demo():
+            msg = "DEMO MODE - SIMULATED DATA (not your real surroundings).  Quit and run  ./run.sh  for the live sensor."
+            col = LEVEL_COL[WARN]
+        elif not self.w.sensor_ok():
+            msg = "SENSOR OFFLINE - " + (self.src.status or "plug in the ESP32 (blue light must blink)")
+            col = LEVEL_COL[HIGH]
+        if not msg:
+            return y
+        h = int(u * 1.3)
+        pygame.draw.rect(self.screen, col, (0, y, self.W, h))
+        self.text(msg, self.f_mb, BG, self.W // 2, y + (h - self.f_mb.get_height()) // 2, center=True, maxw=self.W - u)
+        return y + h + u // 4
+
     def draw_header(self) -> int:
         u, s = self.u, self.w.sensor
         h = int(u * 1.9)
@@ -1629,6 +1650,7 @@ class App:
             pygame.display.flip()
             return
         y = self.draw_header()
+        y = self.draw_mode_banner(y)
         if self.view in ("list", "menu"):
             y = self.draw_tabs(y)
         bottom = self.draw_footer(self.hints() if self.view != "menu" else [("A", "select"), ("B", "close")])
